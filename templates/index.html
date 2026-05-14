@@ -350,7 +350,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 // GLOBALS
 //const BACKEND = 'http://127.0.0.1:5000';
 const BACKEND = '';
-const TCOLORS = ['#47c8ff','#e8ff47','#a78bfa','#fb923c','#a78bfa'];
+const TCOLORS = ['#47c8ff','#becf48','#a78bfa','#fb923c','#a78bfa'];
 const TCLASS  = ['t1','t2','t3','t4','t5'];
 const PROVIDER_META = {
   anthropic: { label: 'Anthropic Claude', color: '#e8ff47' },
@@ -668,7 +668,7 @@ function renderTierList(tierNum, suppliers) {
           <div style="display:flex;gap:5px;align-items:center">${nomap}<span class="cdot ${cf}" title="${s.confidence}"></span></div>
         </div>
         <button
-        onclick="openSupplierModal(${tierNum}, '${(s.company_name||'').replace(/'/g,"\\'")}')"
+        onclick="event.stopPropagation(); openSupplierModal(${tierNum}, '${(s.company_name||'').replace(/'/g,"\\'")}')"
         style="margin-top:9px;width:100%;padding:5px 0;background:transparent;border:1px solid var(--border);border-radius:2px;color:var(--muted);font-family:'Space Mono',monospace;font-size:.62rem;letter-spacing:.08em;cursor:pointer;transition:border-color .15s,color .15s"
         onmouseover="this.style.borderColor='var(--accent2)';this.style.color='var(--accent2)'"
         onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">

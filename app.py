@@ -80,6 +80,7 @@ COUNTRY_COORDS = {
 
 PRODUCTS_TO_TEST = [
     "Drone (mini class, weight <=5, size <=450mm) DC Brushless Motor ",
+    "Fentanyl Citrate 800mg Oral Transmucosal"
 ]
 
 DEPTH    = 3       # supply chain depth per product (1–3)
@@ -815,7 +816,7 @@ def write_product_sheet(ws, result: dict):
     product = sc.get("product", {})
 
     ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 50
+    ws.column_dimensions["B"].width = 320
 
     title = ws.cell(row=1, column=1, value=product.get("product_name", result["product_input"]))
     title.font = Font(name=FONT, bold=True, size=13, color="1A237E")
@@ -835,7 +836,7 @@ def write_product_sheet(ws, result: dict):
     for r_idx, (label, value) in enumerate(overview_fields, 3):
         data_cell(ws, r_idx, 1, label, bold=True, fill=_fill("E8EAF6"))
         data_cell(ws, r_idx, 2, value)
-        ws.row_dimensions[r_idx].height = 18
+        ws.row_dimensions[r_idx].height = 90
 
     # Summary
     summary_row = len(overview_fields) + 4
@@ -896,7 +897,7 @@ def write_product_sheet(ws, result: dict):
             data_cell(ws, current_row, 6, s.get("confidence", ""), fill=fill)
             data_cell(ws, current_row, 7, s.get("source_hint", ""), fill=fill)
             data_cell(ws, current_row, 8, provider, fill=fill)
-            ws.row_dimensions[current_row].height = 70
+            ws.row_dimensions[current_row].height = 80
             current_row += 1
 
         current_row += 1 # Spacing between tiers

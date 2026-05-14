@@ -4,6 +4,7 @@ Search backends:
   - Gemini provider: uses Gemini's built-in Google Search grounding (no separate search API needed)
   - Anthropic/OpenAI: uses DuckDuckGo (ddgs package)
 """
+"""testing branches"""
 
 import json, re, time, threading, os
 from dotenv import load_dotenv

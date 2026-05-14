@@ -896,7 +896,7 @@ def write_product_sheet(ws, result: dict):
             data_cell(ws, current_row, 6, s.get("confidence", ""), fill=fill)
             data_cell(ws, current_row, 7, s.get("source_hint", ""), fill=fill)
             data_cell(ws, current_row, 8, provider, fill=fill)
-            ws.row_dimensions[current_row].height = 18
+            ws.row_dimensions[current_row].height = 70
             current_row += 1
 
         current_row += 1 # Spacing between tiers

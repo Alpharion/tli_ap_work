@@ -605,6 +605,7 @@ List 3-5 distinct real direct suppliers to {parent} specifically. Do NOT mix in 
                         sname = s.get("company_name","").strip()
                         if sname and sname.lower() != "unknown":
                             next_parents.append({"name": sname, "oem_root": oem_root})
+                    previous_parents = next_parents # assign next_parents back to loop
             except Exception as e:
                 push("status", message=f"  ⚠️ Parse error tier {tier_num} [{parent}]: {e}")
 

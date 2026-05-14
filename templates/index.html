@@ -666,7 +666,16 @@ function renderTierList(tierNum, suppliers) {
         <div class="s-foot">
           <div class="s-to">▶ <strong>${s.supplies_to||'—'}</strong></div>
           <div style="display:flex;gap:5px;align-items:center">${nomap}<span class="cdot ${cf}" title="${s.confidence}"></span></div>
-        </div>`;
+        </div>
+        <button
+        onclick="openSupplierModal(${tierNum}, '${(s.company_name||'').replace(/'/g,"\\'")}')"
+        style="margin-top:9px;width:100%;padding:5px 0;background:transparent;border:1px solid var(--border);border-radius:2px;color:var(--muted);font-family:'Space Mono',monospace;font-size:.62rem;letter-spacing:.08em;cursor:pointer;transition:border-color .15s,color .15s"
+        onmouseover="this.style.borderColor='var(--accent2)';this.style.color='var(--accent2)'"
+        onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
+        READ MORE ↗
+        </button>
+        ` // insert button for readMore
+        ;
       card.addEventListener('click',()=>{
         switchTab('map');
         const n = nodeReg[(s.company_name||'').toLowerCase()];
@@ -968,8 +977,77 @@ function closeOemModal() {
 }
 
 // ── open modal Supplier Card ───────────────────────────────────────────────────────────────
-function openSupplierModal(companyName) {
-  
+function openSupplierModal(tierNum, companyName) {
+  const tier = lastSupplyChain?.tiers?.[`tier_${tierNum}`]?.find(t => t.company_name === companyName);
+  if (!tier) return;
+
+  const confClass = tier.confidence==='high' ? 'ch' : tier.confidence==='medium' ? 'cm' : 'cl';
+  const providers = (tier._providers || []).filter(p => p.name);
+  const color = TCOLORS[tierNum-1] || '#fb923c';
+
+  const providersHTML = providers.length > 0
+    ? providers.map(p => {
+        const meta = PROVIDER_META[p.name] || { label: p.name, color: 'var(--muted)' };
+        const pCf = p.confidence==='high' ? 'ch' : p.confidence==='medium' ? 'cm' : 'cl';
+        const comps = (p.components_supplied || []).map(c => `<span class="ctag">${c}</span>`).join('');
+        return `
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:13px 15px">
+            <div style="font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:${meta.color};border:1px solid ${meta.color};display:inline-block;padding:2px 7px;border-radius:2px;margin-bottom:10px">${meta.label}</div>
+            ${p.supplies_to ? `
+            <div style="font-size:.7rem;color:var(--muted);margin-bottom:3px">Supplies to</div>
+            <div style="font-size:.78rem;margin-bottom:8px">${p.supplies_to}</div>` : ''}
+            ${comps ? `
+            <div style="font-size:.7rem;color:var(--muted);margin-bottom:3px">Components</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${comps}</div>` : ''}
+            ${p.source_hint ? `
+            <div style="font-size:.7rem;color:var(--muted);margin-bottom:3px">Source</div>
+            <div style="font-size:.72rem;line-height:1.6;color:#b0b4cc;margin-bottom:8px">${p.source_hint}</div>` : ''}
+            <div style="display:flex;align-items:center;gap:5px;margin-top:9px;padding-top:8px;border-top:1px solid var(--border)">
+              <span class="cdot ${pCf}"></span>
+              <span style="font-size:.65rem;color:var(--muted)">Confidence: <strong style="color:var(--text)">${p.confidence||'unknown'}</strong></span>
+            </div>
+          </div>`;
+      }).join('')
+    : `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:13px 15px">
+        <div style="font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Single Provider</div>
+        ${tier.supplies_to ? `
+        <div style="font-size:.7rem;color:var(--muted);margin-bottom:3px">Supplies to</div>
+        <div style="font-size:.78rem;margin-bottom:8px">${tier.supplies_to}</div>` : ''}
+        ${tier.components_supplied?.length ? `
+        <div style="font-size:.7rem;color:var(--muted);margin-bottom:3px">Components</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+          ${tier.components_supplied.map(c => `<span class="ctag">${c}</span>`).join('')}
+        </div>` : ''}
+        ${tier.source_hint ? `
+        <div style="font-size:.7rem;color:var(--muted);margin-bottom:3px">Source</div>
+        <div style="font-size:.72rem;line-height:1.6;color:#b0b4cc">${tier.source_hint}</div>` : ''}
+        <div style="display:flex;align-items:center;gap:5px;margin-top:9px;padding-top:8px;border-top:1px solid var(--border)">
+          <span class="cdot ${confClass}"></span>
+          <span style="font-size:.65rem;color:var(--muted)">Confidence: <strong style="color:var(--text)">${tier.confidence||'unknown'}</strong></span>
+        </div>
+      </div>`;
+
+  document.getElementById('oemModalContent').innerHTML = `
+    <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.2rem;margin-bottom:3px">${tier.company_name}</div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap">
+      <span style="font-size:.7rem;color:var(--muted)">📍 ${tier.country||'—'}</span>
+      <span style="font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;color:${color};border:1px solid ${color};padding:2px 7px;border-radius:2px">TIER ${tierNum}</span>
+      ${tier.lat && tier.lng ? `
+        <button onclick="closeOemModal();switchTab('map');setTimeout(()=>{const n=nodeReg['${tier.company_name.toLowerCase()}'];if(n){lmap.setView([n.lat,n.lng],5,{animate:true});setTimeout(()=>n.marker.openPopup(),500);}},100)"
+          style="background:transparent;border:1px solid var(--accent2);color:var(--accent2);font-family:'Space Mono',monospace;font-size:.6rem;padding:2px 8px;border-radius:2px;cursor:pointer;letter-spacing:.06em">
+          VIEW ON MAP ↗
+        </button>` : ''}
+    </div>
+    <div style="font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">
+      Provider Breakdown · ${providers.length} source${providers.length !== 1 ? 's' : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:9px">
+      ${providersHTML}
+    </div>`;
+
+  document.getElementById('oemModal').style.display = 'flex';
+  document.body.style.overflow = 'hidden';
 }
 
 

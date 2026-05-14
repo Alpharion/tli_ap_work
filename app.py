@@ -537,21 +537,22 @@ List 2-8 significant OEMs as SEPARATE array elements."""
     supply_chain = {"product": product_info, "oems": oem_list, "tiers":{}}
 
     # Build per-OEM supplier map: each OEM searched individually
-    # previous_parents: list of {name, oem_root} dicts
-    oem_names = [o.get("company_name","") for o in oem_list if o.get("company_name","").lower() not in ("unknown","")]
+    # previous_parents: list of {name, oem_root, confidence} dicts
+    oem_names = [{"name": o.get("company_name",""), "confidence": o.get("confidence", "")} 
+                 for o in oem_list if o.get("company_name","").lower() not in ("unknown","")]
     if not oem_names:
-        oem_names = [product_info.get("oem_manufacturer", product_input)]
+        oem_names = [{"name": product_info.get("oem_manufacturer", product_input), "confidence": "high"}]
 
     # For tier 1: each parent IS an OEM; for tier 2+: parents are tier-1 suppliers
     # We track parent → oem_root so results stay grouped
     # Structure: list of {"name": str, "oem_root": str}
-    previous_parents = [{"name": n, "oem_root": n} for n in oem_names]
+    previous_parents = [{"name": n.get("name", ""), "oem_root": n.get("name", ""), "confidence": n.get("confidence", "")} for n in oem_names]
 
     for tier_num in range(1, depth + 1):
         push("status", message=f"🏭 Researching Tier-{tier_num} suppliers…")
         tier_suppliers = []   # all suppliers this tier across all parents
         next_parents   = []   # feeds into next tier loop
-
+        # If need to sort or ensure got all 3 tiers of confidence, sort here before looping
         for parent_info in previous_parents[:6]:  # max 6 parents per tier
             parent    = parent_info["name"]
             oem_root  = parent_info["oem_root"]
@@ -604,7 +605,8 @@ List 3-5 distinct real direct suppliers to {parent} specifically. Do NOT mix in 
                     for s in found:
                         sname = s.get("company_name","").strip()
                         if sname and sname.lower() != "unknown":
-                            next_parents.append({"name": sname, "oem_root": oem_root})
+                            # added confidence level so can sort if in production, looking for more variety
+                            next_parents.append({"name": sname, "oem_root": oem_root, "confidence": s.get("confidence")})
                     previous_parents = next_parents # assign next_parents back to loop
             except Exception as e:
                 push("status", message=f"  ⚠️ Parse error tier {tier_num} [{parent}]: {e}")

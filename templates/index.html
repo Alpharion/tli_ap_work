@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SupplierMap — Supply Chain Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<style>
+:root {
+  --bg:#e1e0d7;
+  --bg1:#0a0b0f;
+  --surface:#111318;
+  --surface2:#1a1d26;
+  --border:#2a2e3d;
+  --accent:#106b0a;
+  --accent1:#e8ff47;
+  --accent2:#47c8ff;
+  --accent3:#ff6b47;
+  --accent4:#ffc83c;
+  --text:#e2e4ed; --muted:#6b7094; --text1:#ffc654; --muted1:#d4d5d9; --muted2:#1b1c20;
+  --t1:#47c8ff; --t2:#8118de; --t3:#a78bfa; --t4:#fb923c; --ok:#4ade80;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text1);font-family:'Space Mono',monospace;min-height:100vh;overflow-x:hidden}
+header{position:relative;z-index:10;border-bottom:1px solid var(--border);padding:18px 36px;display:flex;align-items:center;justify-content:space-between;background:rgba(10,11,15,.95);backdrop-filter:blur(12px)}
+.logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem;letter-spacing:-.02em}
+.logo span{color:var(--accent)}
+.tagline{font-size:.62rem;color:var(--muted1);letter-spacing:.15em;text-transform:uppercase}
+.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:9}
+.tab-btn{padding:13px 26px;font-family:'Space Mono',monospace;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-btn:hover:not(.active){color:var(--text)}
+.container{max-width:1400px;margin:0 auto;padding:28px 22px}
+
+/* search */
+.search-panel{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:28px 32px;margin-bottom:24px;position:relative;overflow:hidden}
+.search-panel::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),var(--accent2),var(--accent3))}
+.search-title{font-family:'Syne',sans-serif;font-weight:800;font-size:1.7rem;letter-spacing:-.03em;margin-bottom:5px}
+.search-title em{color:var(--accent);font-style:normal}
+.search-sub{color:var(--muted1);font-size:.73rem;margin-bottom:24px;line-height:1.6}
+.search-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:7px;flex:1;min-width:200px}
+.field label{font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.field input,.field select{background:var(--bg);border:1px solid var(--border);color:var(--muted2);font-family:'Space Mono',monospace;font-size:.88rem;padding:11px 14px;border-radius:3px;outline:none;transition:border-color .2s}
+.field input:focus,.field select:focus{border-color:var(--accent)}
+.field input::placeholder{color:var(--muted)}
+.btn-map{background:var(--accent1);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
+.btn-map:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(232,255,71,.3)}
+.btn-map:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+
+/* log */
+.status-log{background:var(--bg1);border:1px solid var(--border);border-radius:3px;padding:14px;margin-top:18px;max-height:130px;overflow-y:auto;display:none}
+.status-log.visible{display:block}
+.log-line{font-size:.7rem;color:var(--muted);line-height:1.8;animation:fadeIn .3s ease}
+.log-line.active{color:var(--accent2)}
+@keyframes fadeIn{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}
+@keyframes slideUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* product card */
+.product-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--muted1);border-radius:4px;padding:18px 22px;margin-bottom:20px;display:none;animation:slideUp .4s ease}
+.product-card.visible{display:block}
+.product-label{font-size:.58rem;letter-spacing:.15em;text-transform:uppercase;color:var(--accent4);margin-bottom:4px}
+.product-name{font-family:'Syne',sans-serif;font-size:1.35rem;font-weight:800;margin-bottom:4px}
+.product-meta{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}
+.meta-chip{background:var(--surface2);border:1px solid var(--border);padding:3px 10px;border-radius:2px;font-size:.68rem;color:var(--muted1)}
+.meta-chip strong{color:var(--text1)}
+
+/* tabs */
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* MAP */
+#mapContainer{background:var(--surface);border:1px solid var(--border);border-radius:4px;overflow:hidden;position:relative;display:none}
+#map{height:560px;width:100%}
+.leaflet-container{background:#0d1015 !important}
+.leaflet-tile-pane{opacity:1}
+.leaflet-tile{filter:brightness(.45) saturate(.25) hue-rotate(195deg)}
+.leaflet-control-zoom a{background:var(--surface) !important;color:var(--text) !important;border-color:var(--border) !important}
+.leaflet-control-attribution{background:rgba(10,11,15,.75) !important;color:var(--muted) !important;font-size:.6rem !important}
+.leaflet-control-attribution a{color:var(--muted) !important}
+.leaflet-popup-content-wrapper{background:var(--surface) !important;border:1px solid var(--border) !important;border-radius:4px !important;box-shadow:0 8px 32px rgba(0,0,0,.65) !important}
+.leaflet-popup-tip{background:var(--surface) !important}
+.leaflet-popup-content{color:var(--text) !important;font-family:'Space Mono',monospace !important;font-size:.73rem !important;margin:12px 14px !important}
+.leaflet-popup-close-button{color:var(--muted) !important}
+.pu-name{font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;margin-bottom:3px}
+.pu-country{color:var(--muted);margin-bottom:7px;font-size:.7rem}
+.pu-tier{display:inline-block;padding:2px 8px;border-radius:2px;font-size:.62rem;margin-bottom:7px;border:1px solid}
+.pu-comps{color:var(--muted);font-size:.68rem;line-height:1.6}
+
+/* legend — 2-col, raised above footer */
+.map-legend{position:absolute;bottom:60px;left:18px;z-index:1000;background:rgba(10,11,15,.92);border:1px solid var(--border);padding:12px 16px;border-radius:4px;backdrop-filter:blur(8px);display:grid;grid-template-columns:1fr 1fr;column-gap:16px}
+.legend-title{grid-column:1/-1;font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:9px}
+.legend-item{display:flex;align-items:center;gap:9px;margin-bottom:5px;font-size:.7rem}
+.legend-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0}
+.legend-dash{width:22px;height:2px;flex-shrink:0;border-top:2px dashed}
+
+/* heatmap controls */
+.heat-controls{position:absolute;top:12px;right:12px;z-index:1000;background:rgba(10,11,15,.92);border:1px solid var(--border);padding:12px 14px;border-radius:4px;backdrop-filter:blur(8px);min-width:175px}
+.heat-title{font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.heat-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px;font-size:.7rem;cursor:pointer}
+.heat-toggle:last-child{margin-bottom:0}
+.heat-toggle input[type=checkbox]{width:14px;height:14px;accent-color:var(--accent1);cursor:pointer;flex-shrink:0}
+.heat-swatch{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.heat-label{flex:1;color:var(--text)}
+.heat-sep{border:none;border-top:1px solid var(--border);margin:8px 0}
+
+/* stats */
+.map-stats{padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:22px;flex-wrap:wrap;background:var(--surface)}
+.stat{font-size:.7rem;color:var(--muted)}
+.stat strong{color:var(--text);font-size:.95rem;display:block;margin-bottom:1px}
+
+/* empty */
+.empty-state{text-align:center;padding:55px 20px;color:var(--muted)}
+.empty-icon{font-size:2.8rem;margin-bottom:12px}
+.empty-title{font-family:'Syne',sans-serif;font-size:1.05rem;margin-bottom:7px}
+.empty-sub{font-size:.73rem;line-height:1.7}
+
+/* supplier list */
+.tier-block{margin-bottom:28px;animation:slideUp .5s ease}
+.tier-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.tier-badge{font-family:'Syne',sans-serif;font-weight:800;font-size:.68rem;letter-spacing:.1em;padding:3px 10px;border-radius:2px;border:1px solid}
+.tier-badge.t1{color:var(--t1);border-color:var(--t1);background:rgba(71,200,255,.08)}
+.tier-badge.t2{color:var(--t2);border-color:var(--t2);background:rgba(232, 193, 0, 0.08)}
+.tier-badge.t3{color:var(--t3);border-color:var(--t3);background:rgba(167,139,250,.08)}
+.tier-badge.t4{color:var(--t4);border-color:var(--t4);background:rgba(251,146,60,.08)}
+.tier-count{font-size:.7rem;color:var(--muted)}
+.connector{display:flex;align-items:center;gap:10px;margin:12px 0 6px;color:var(--border);font-size:.68rem}
+.connector-line{flex:1;height:1px;background:var(--border)}
+.supplier-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:9px}
+.supplier-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:14px 16px;transition:border-color .2s,transform .2s;position:relative;overflow:hidden;cursor:pointer}
+.supplier-card:hover{border-color:var(--muted);transform:translateY(-2px)}
+.supplier-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%}
+.supplier-card.t1::before{background:var(--t1)}.supplier-card.t2::before{background:var(--t3)}
+.supplier-card.t3::before{background:var(--t3)}.supplier-card.t4::before{background:var(--t4)}
+.s-name{font-family:'Syne',sans-serif;font-weight:700;font-size:.88rem;margin-bottom:3px}
+.s-country{font-size:.68rem;color:var(--muted);margin-bottom:7px}
+.s-comps{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:7px}
+.ctag{background:var(--surface2);border:1px solid var(--border);padding:2px 6px;border-radius:2px;font-size:.6rem;color:var(--muted)}
+.s-foot{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+.s-to{font-size:.6rem;color:var(--muted)}
+.s-to strong{color:var(--text)}
+.cdot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.ch{background:var(--ok)}.cm{background:var(--accent1)}.cl{background:var(--accent3)}
+.no-map{font-size:.58rem;color:var(--muted);padding:1px 5px;border:1px solid var(--border);border-radius:2px}
+
+/* summary */
+.summary-block{background:var(--surface);border:1px solid var(--border);border-top:2px solid var(--accent2);border-radius:4px;padding:22px 26px;margin-top:24px;display:none;animation:slideUp .5s ease}
+.summary-block.visible{display:block}
+.summary-label{font-size:.58rem;letter-spacing:.15em;text-transform:uppercase;color:var(--accent2);margin-bottom:11px}
+.summary-text{font-size:.8rem;line-height:1.9;color:#b0b4cc}
+
+/* provider badges */
+.provider-badge{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:3px;border:1px solid var(--border);font-size:.68rem;background:var(--surface2)}
+.pb-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.pb-dot.ok{background:var(--ok)}.pb-dot.err{background:var(--accent3)}
+
+/* OEM section */
+.oem-section{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:4px;padding:18px 22px;margin-bottom:20px;display:none;animation:slideUp .4s ease}
+.oem-section.visible{display:block}
+.oem-label{font-size:.58rem;letter-spacing:.15em;text-transform:uppercase;color:var(--accent4);margin-bottom:10px}
+.oem-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:9px;margin-top:10px}
+.oem-card{background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:12px 14px;position:relative;overflow:hidden}
+.oem-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:var(--accent)}
+.oem-name{font-family:'Syne',sans-serif;font-weight:700;font-size:.88rem;margin-bottom:3px}
+.oem-country{font-size:.68rem;color:var(--muted);margin-bottom:5px}
+.oem-role{font-size:.65rem;color:var(--accent2);margin-bottom:4px}
+.oem-notes{font-size:.63rem;color:var(--muted);line-height:1.5}
+.ms-badge{display:inline-block;padding:1px 7px;border-radius:2px;font-size:.6rem;border:1px solid;margin-left:6px}
+.ms-high{color:var(--ok);border-color:var(--ok)}.ms-medium{color:var(--accent1);border-color:var(--accent1)}.ms-low{color:var(--muted);border-color:var(--muted)}
+
+/* download bar */
+.download-bar{display:none;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center}
+.download-bar.visible{display:flex}
+.btn-dl{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:3px;border:1px solid;font-family:'Space Mono',monospace;font-size:.72rem;letter-spacing:.05em;cursor:pointer;transition:transform .15s,box-shadow .15s;font-weight:700;text-decoration:none}
+.btn-dl:hover{transform:translateY(-1px)}
+.btn-dl:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-dl.pdf{background:transparent;color:#ff6b47;border-color:#ff6b47}
+.btn-dl.pdf:hover{box-shadow:0 4px 16px rgba(255,107,71,.3)}
+.btn-dl.word{background:transparent;color:#47c8ff;border-color:#47c8ff}
+.btn-dl.word:hover{box-shadow:0 4px 16px rgba(71,200,255,.3)}
+.dl-label{font-size:.65rem;color:var(--muted1)}
+
+.spinner{display:inline-block;width:13px;height:13px;border:2px solid rgba(232,255,71,.2);border-top-color:var(--accent1);border-radius:50%;animation:spin .7s linear infinite;margin-right:7px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    
+    <div class="logo"><img src="{{ url_for('static', filename='images/nusW-tliap_transparent_bg.png') }}" width="320" height="80" style="vertical-align: middle;"> Supplier<span>Map</span></div>
+    <div class="tagline">Supply Chain Intelligence</div>
+  </div>
+  <div style="font-size:.62rem;color:var(--muted);text-align:right">Powered by web crawling + AI<br><span style="color:var(--accent)">● LIVE</span></div>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" id="tbMap" onclick="switchTab('map')">🗺 Geographic Map</button>
+  <button class="tab-btn" id="tbList" onclick="switchTab('list')">🏭 Supplier List</button>
+</div>
+
+<div class="container">
+
+  <div class="search-panel">
+    <div class="search-title">Map Your <em>Supply Chain</em></div>
+    <div class="search-sub">Enter a product name, part number, or specification. Suppliers are plotted live on a world map with connection lines.</div>
+    <div class="search-row">
+      <div class="field">
+        <label>Product / Part Number / Specification</label>
+        <input id="productInput" type="text" placeholder="e.g. Intel Core i9-14900K, Boeing 737 landing gear, TSMC N3E…" autocomplete="off">
+      </div>
+      <div class="field" style="max-width:155px;min-width:135px">
+        <label>Tier Depth</label>
+        <select id="depthSelect">
+          <option value="0" selected>OEM only</option>
+          <option value="1">OEM->Tier 1</option>
+          <option value="2" >OEM->Tier 2</option>
+          <option value="3" >OEM->Tier 3</option>
+          
+        </select>
+      </div>
+      <div class="field" style="max-width:210px;min-width:175px">
+        <label>AI Provider</label>
+        <select id="providerSelect">
+          <option value="anthropic">⚪ Anthropic Claude</option>
+          <option value="openai">⚪ OpenAI GPT-4o-mini</option>
+          <option value="gemini">⚪ Google Gemini</option>
+          <option value="deepseek">⚪ DeepSeek V3</option>
+          <option value="all" selected>⚪ All Models</option>
+        </select>
+      </div>
+      <button class="btn-map" id="mapBtn" onclick="startMapping()">▶ MAP CHAIN</button>
+    </div>
+    <div id="providerStatus" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap"></div>
+    <div class="status-log" id="statusLog"></div>
+  </div>
+
+  <div class="product-card" id="productCard">
+    <div class="product-label">Identified Product Description</div>
+    <div class="product-name" id="pcName">—</div>
+    <div id="pcDesc" style="font-size:.76rem;color:var(--muted1);margin-top:5px;line-height:1.7"></div>
+    <div class="product-meta" id="pcMeta"></div>
+  </div>
+
+  <!-- OEM Section -->
+  <div class="oem-section" id="oemSection">
+    <div class="oem-label">OEM Manufacturers — All companies that produce this product</div>
+    <div class="oem-grid" id="oemGrid"></div>
+  </div>
+
+  <!-- Download Bar -->
+  <div class="download-bar" id="downloadBar">
+    <span class="dl-label">Download results:</span>
+    <button class="btn-dl pdf" id="btnPdf" onclick="downloadReport('pdf')" disabled>📄 Download PDF</button>
+    <button class="btn-dl word" id="btnWord" onclick="downloadReport('docx')" disabled>📝 Download Word</button>
+  </div>
+
+  <!-- MAP TAB -->
+  <div class="tab-panel active" id="tab-map">
+    <div id="mapContainer">
+      <div id="map"></div>
+
+      <!-- Legend — 2-col, raised above OSM footer -->
+      <div class="map-legend">
+        <div class="legend-title">Supply Chain</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#d50c0c;border:2px solid #ffe550"></div>OEM</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#47c8ff"></div>Tier 1</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#e8ff47"></div>Tier 2</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div>Tier 3</div>
+        <!--<div class="legend-item"><div class="legend-dot" style="background:#fb923c"></div>Tier 4</div>-->
+        <div class="legend-item"><div class="legend-dash" style="border-color:#47c8ff"></div>Supply link</div>
+      </div>
+
+      <!-- Heatmap controls -->
+      <div class="heat-controls" id="heatControls" style="display:none">
+        <div class="heat-title">🌡 Concentration Risk</div>
+        <label class="heat-toggle">
+          <span class="heat-swatch" style="background:radial-gradient(circle,#ff0000,#ffff00,#0000ff)"></span>
+          <span class="heat-label">All Tiers</span>
+          <input type="checkbox" id="heatAll" onchange="toggleHeat('all',this.checked)">
+        </label>
+        <hr class="heat-sep">
+        <label class="heat-toggle">
+          <span class="heat-swatch" style="background:#d50c0c"></span>
+          <span class="heat-label">OEM only</span>
+          <input type="checkbox" id="heatOEM" onchange="toggleHeat('oem',this.checked)">
+        </label>
+        <label class="heat-toggle">
+          <span class="heat-swatch" style="background:#47c8ff"></span>
+          <span class="heat-label">Tier 1 only</span>
+          <input type="checkbox" id="heat1" onchange="toggleHeat('tier_1',this.checked)">
+        </label>
+        <label class="heat-toggle">
+          <span class="heat-swatch" style="background:#e8ff47"></span>
+          <span class="heat-label">Tier 2 only</span>
+          <input type="checkbox" id="heat2" onchange="toggleHeat('tier_2',this.checked)">
+        </label>
+       <label class="heat-toggle">
+          <span class="heat-swatch" style="background:#a78bfa"></span>
+          <span class="heat-label">Tier 3 only</span>
+          <input type="checkbox" id="heat3" onchange="toggleHeat('tier_3',this.checked)">
+        </label> 
+        <!--<label class="heat-toggle">
+          <span class="heat-swatch" style="background:#fb923c"></span>
+          <span class="heat-label">Tier 4 only</span>
+          <input type="checkbox" id="heat4" onchange="toggleHeat('tier_4',this.checked)">
+        </label> -->
+      </div>
+
+      <div class="map-stats" id="mapStats"></div>
+    </div>
+    <div class="empty-state" id="emptyStateMap">
+      <div class="empty-icon">🌍</div>
+      <div class="empty-title">Geographic map will appear here</div>
+      <div class="empty-sub">Run a search to see suppliers plotted on a world map<br>with lines showing supply chain connections.</div>
+    </div>
+  </div>
+
+  <!-- LIST TAB -->
+  <div class="tab-panel" id="tab-list">
+    <div id="tiersSection"></div>
+    <div class="empty-state" id="emptyStateList">
+      <div class="empty-icon">🏭</div>
+      <div class="empty-title">Supplier list will appear here</div>
+      <div class="empty-sub">Run a search to discover and list all suppliers by tier.</div>
+    </div>
+  </div>
+
+  <div class="summary-block" id="summaryBlock">
+    <div class="summary-label">Executive Summary</div>
+    <div class="summary-text" id="summaryText"></div>
+  </div>
+
+</div>
+
+<script>
+//const BACKEND = 'http://127.0.0.1:5000';
+const BACKEND = '';
+const TCOLORS = ['#47c8ff','#e8ff47','#a78bfa','#fb923c','#a78bfa'];
+const TCLASS  = ['t1','t2','t3','t4','t5'];
+
+let evtSrc = null;
+let lmap = null;
+const nodeReg = {};
+let oemMarker = null;
+
+// ── Heatmap state ─────────────────────────────────────────────────────────────
+const heatPoints = { oem:[], tier_1:[], tier_2:[], tier_3:[], tier_4:[] };
+const heatLayers = {};
+
+function addHeatPoint(key, lat, lng, intensity=1.0) {
+  if (!heatPoints[key]) heatPoints[key] = [];
+  heatPoints[key].push([lat, lng, intensity]);
+}
+
+const HEAT_GRADIENTS = {
+  all:    {0.2:'#003cff', 0.45:'#00cfff', 0.65:'#ffff00', 0.85:'#ff6600', 1.0:'#ff0000'},
+  oem:    {0.3:'#6b0000', 0.7:'#d50c0c',  1.0:'#ff6060'},
+  tier_1: {0.3:'#003d5c', 0.7:'#47c8ff',  1.0:'#aaf0ff'},
+  tier_2: {0.3:'#4a4a00', 0.7:'#e8ff47',  1.0:'#ffffaa'},
+  tier_3: {0.3:'#2d1a6b', 0.7:'#a78bfa',  1.0:'#d4c4ff'},
+  tier_4: {0.3:'#4a1a00', 0.7:'#fb923c',  1.0:'#ffd0a0'},
+};
+
+function toggleHeat(key, on) {
+  if (on) {
+    if (heatLayers[key]) { lmap.removeLayer(heatLayers[key]); delete heatLayers[key]; }
+    let points = key === 'all'
+      ? Object.values(heatPoints).flat()
+      : (heatPoints[key] || []);
+    if (points.length === 0) {
+      alert('No mapped coordinates for this tier yet.');
+      const ids = {all:'heatAll',oem:'heatOEM',tier_1:'heat1',tier_2:'heat2',tier_3:'heat3',tier_4:'heat4'};
+      document.getElementById(ids[key]).checked = false;
+      return;
+    }
+    const layer = L.heatLayer(points, {
+      radius:35, blur:25, maxZoom:6, max:1.0,
+      gradient: HEAT_GRADIENTS[key] || HEAT_GRADIENTS.all
+    });
+    layer.addTo(lmap);
+    heatLayers[key] = layer;
+  } else {
+    if (heatLayers[key]) { lmap.removeLayer(heatLayers[key]); delete heatLayers[key]; }
+  }
+}
+
+function resetHeatPoints() {
+  Object.keys(heatPoints).forEach(k => heatPoints[k] = []);
+  Object.keys(heatLayers).forEach(k => {
+    if (lmap) lmap.removeLayer(heatLayers[k]);
+    delete heatLayers[k];
+  });
+  ['heatAll','heatOEM','heat1','heat2','heat3','heat4'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.checked = false;
+  });
+  document.getElementById('heatControls').style.display = 'none';
+}
+
+// ── Leaflet map ───────────────────────────────────────────────────────────────
+const tierNodes = {};
+
+function initMap() {
+  if (lmap) { lmap.remove(); lmap = null; }
+  Object.keys(nodeReg).forEach(k => delete nodeReg[k]);
+  Object.keys(tierNodes).forEach(k => delete tierNodes[k]);
+  oemMarker = null;
+  resetHeatPoints();
+
+  lmap = L.map('map', { center:[20,10], zoom:2, zoomControl:true });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution:'© <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
+    maxZoom:18
+  }).addTo(lmap);
+  setTimeout(() => lmap.invalidateSize(), 200);
+}
+
+function addNode(lat, lng, label, color, tier, popupHtml, jitter=true) {
+  if (!lmap) return null;
+  const jlat = jitter ? lat + (Math.random()-.5)*1.5 : lat;
+  const jlng = jitter ? lng + (Math.random()-.5)*1.5 : lng;
+  const r = tier===0 ? 10 : Math.max(6, 9-tier*1.5);
+  const m = L.circleMarker([jlat, jlng], {
+    radius: r,
+    fillColor: color,
+    color: tier===0 ? '#ffe550' : 'rgba(0,0,0,0.5)',
+    weight: tier===0 ? 2.5 : 1,
+    fillOpacity: 0.9
+  }).addTo(lmap);
+  m.bindPopup(popupHtml, {maxWidth:270});
+  m.bindTooltip(label, {direction:'top'});
+  return { marker:m, lat:jlat, lng:jlng };
+}
+
+function drawLine(fromLat, fromLng, toLat, toLng, color) {
+  if (!lmap) return;
+  L.polyline([[fromLat,fromLng],[toLat,toLng]], {
+    color, weight:1.5, opacity:.55, dashArray:'5 7'
+  }).addTo(lmap);
+}
+
+function fitBounds() {
+  if (!lmap) return;
+  const latlngs = [];
+  lmap.eachLayer(l => { if (l.getLatLng) latlngs.push(l.getLatLng()); });
+  if (latlngs.length > 0) lmap.fitBounds(L.latLngBounds(latlngs), {padding:[40,40], maxZoom:6});
+}
+
+// ── tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  ['map','list'].forEach(t => {
+    document.getElementById('tb'+t.charAt(0).toUpperCase()+t.slice(1)).classList.toggle('active', t===name);
+    document.getElementById('tab-'+t).classList.toggle('active', t===name);
+  });
+  if (name==='map' && lmap) setTimeout(() => lmap.invalidateSize(), 60);
+}
+
+// ── log ───────────────────────────────────────────────────────────────────────
+function appendLog(msg, active=true) {
+  const log = document.getElementById('statusLog');
+  log.classList.add('visible');
+  const d = document.createElement('div');
+  d.className = 'log-line' + (active?' active':'');
+  d.textContent = msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ── render product ────────────────────────────────────────────────────────────
+function renderProduct(p) {
+  document.getElementById('emptyStateMap').style.display='none';
+  document.getElementById('emptyStateList').style.display='none';
+  document.getElementById('pcName').textContent = p.product_name||'—';
+  document.getElementById('pcDesc').textContent = p.description||'';
+  const meta = document.getElementById('pcMeta');
+  meta.innerHTML='';
+  [['Category',p.product_category],['Industry',p.industry],['OEM',p.oem_manufacturer],['Country',p.oem_country]]
+    .forEach(([k,v])=>{ if(v&&v.toLowerCase()!=='unknown') meta.innerHTML+=`<div class="meta-chip"><strong>${k}:</strong> ${v}</div>`; });
+  if(p.key_components?.length) meta.innerHTML+=`<div class="meta-chip"><strong>Components:</strong> ${p.key_components.slice(0,4).join(', ')}</div>`;
+  document.getElementById('productCard').classList.add('visible');
+  document.getElementById('mapContainer').style.display='block';
+  setTimeout(()=>lmap&&lmap.invalidateSize(),100);
+  if (p.lat && p.lng) {
+    const popup=`<div class="pu-name">${p.product_name}</div>
+      <div class="pu-country">📍 ${p.oem_country||''}</div>
+      <div class="pu-tier" style="color:#e8ff47;border-color:#e8ff47">OEM</div>
+      <div class="pu-comps">${p.oem_manufacturer||''}</div>`;
+    const node = addNode(p.lat, p.lng, p.product_name, '#ffffff', 0, popup, false);
+    if (node) {
+      oemMarker = node;
+      nodeReg[(p.oem_manufacturer||p.product_name).toLowerCase()] = node;
+    }
+  }
+}
+
+// ── fuzzy parent lookup ───────────────────────────────────────────────────────
+function findParentNode(suppliesTo) {
+  if (!suppliesTo) return null;
+  const target = suppliesTo.toLowerCase().trim();
+  if (nodeReg[target]) return nodeReg[target];
+  for (const [key, node] of Object.entries(nodeReg)) {
+    if (target.includes(key) || key.includes(target)) return node;
+    const tWords = target.split(/\s+/).filter(w=>w.length>3);
+    const kWords = key.split(/\s+/).filter(w=>w.length>3);
+    if (tWords.some(w => kWords.includes(w))) return node;
+  }
+  return null;
+}
+
+// ── render OEMs ───────────────────────────────────────────────────────────────
+function renderOEMs(oems) {
+  if (!oems || oems.length === 0) return;
+  const section = document.getElementById('oemSection');
+  const grid    = document.getElementById('oemGrid');
+  grid.innerHTML = '';
+  section.classList.add('visible');
+
+  oems.forEach((oem, i) => {
+    if (oem.lat && oem.lng) {
+      const popup = `<div class="pu-name">${oem.company_name}</div>
+        <div class="pu-country">📍 ${oem.country||'—'}</div>
+        <div class="pu-tier" style="color:#d50c0c;border-color:#d50c0c">OEM</div>
+        <div class="pu-comps">${oem.role||''} ${oem.notes ? '· '+oem.notes : ''}</div>`;
+      const node = addNode(oem.lat, oem.lng, oem.company_name, '#d50c0c', 0, popup, i > 0);
+      if (node) {
+        nodeReg[oem.company_name.toLowerCase()] = node;
+        if (i === 0) oemMarker = node;
+        const intensity = oem.market_share==='high' ? 1.0 : oem.market_share==='medium' ? 0.6 : 0.3;
+        addHeatPoint('oem', node.lat, node.lng, intensity);
+      }
+    }
+    const msClass = oem.market_share==='high' ? 'ms-high' : oem.market_share==='medium' ? 'ms-medium' : 'ms-low';
+    const confClass = oem.confidence==='high' ? 'ch' : oem.confidence==='medium' ? 'cm' : 'cl';
+    const confLabel = oem.confidence || 'unknown';
+    const card = document.createElement('div');
+    card.className = 'oem-card';
+    card.style.cssText = `opacity:0;animation:slideUp .4s ease ${i*.07}s forwards`;
+    card.innerHTML = `
+      <div class="oem-name">${oem.company_name}
+        ${oem.market_share && oem.market_share!=='unknown' ? `<span class="ms-badge ${msClass}">${oem.market_share}</span>` : ''}
+      </div>
+      <div class="oem-country">📍 ${oem.country||'—'}</div>
+      <div class="oem-role">${oem.role||'OEM'}</div>
+      ${oem.notes ? `<div class="oem-notes">${oem.notes}</div>` : ''}
+      <div style="display:flex;align-items:center;gap:6px;margin-top:8px;padding-top:7px;border-top:1px solid var(--border)">
+        <span class="cdot ${confClass}" title="Confidence: ${confLabel}"></span>
+        <span style="font-size:.62rem;color:var(--muted)">Confidence: <strong style="color:var(--text)">${confLabel}</strong></span>
+      </div>`;
+    grid.appendChild(card);
+  });
+
+  document.getElementById('mapContainer').style.display = 'block';
+  setTimeout(() => lmap && lmap.invalidateSize(), 100);
+}
+
+// ── render tier on map ────────────────────────────────────────────────────────
+function renderTierMap(tierNum, suppliers) {
+  const color = TCOLORS[tierNum-1]||'#fb923c';
+  if (!tierNodes[tierNum]) tierNodes[tierNum] = [];
+
+  suppliers.forEach(s => {
+    if (!s.lat || !s.lng) return;
+    const popup=`<div class="pu-name">${s.company_name}</div>
+      <div class="pu-country">📍 ${s.country||'—'}</div>
+      <div class="pu-tier" style="color:${color};border-color:${color}">Tier ${tierNum}</div>
+      <div class="pu-comps">${(s.components_supplied||[]).join(', ')}</div>
+      <div style="margin-top:5px;font-size:.63rem;color:var(--muted)">▶ Supplies to: ${s.supplies_to||'—'}</div>`;
+    const node = addNode(s.lat, s.lng, s.company_name, color, tierNum, popup);
+    if (node) {
+      nodeReg[s.company_name.toLowerCase()] = node;
+      tierNodes[tierNum].push(node);
+      // Heatmap
+      const hKey = 'tier_'+tierNum;
+      const hInt = s.confidence==='high' ? 1.0 : s.confidence==='medium' ? 0.6 : 0.3;
+      addHeatPoint(hKey, node.lat, node.lng, hInt);
+
+      let parentNode = findParentNode(s.supplies_to);
+      if (!parentNode && tierNum===1 && oemMarker) parentNode = oemMarker;
+      if (!parentNode && tierNum>1 && tierNodes[tierNum-1]?.length>0) {
+        let best=null, bestDist=Infinity;
+        for (const pn of tierNodes[tierNum-1]) {
+          const dist = Math.abs(pn.lat-node.lat)+Math.abs(pn.lng-node.lng);
+          if (dist<bestDist) { bestDist=dist; best=pn; }
+        }
+        parentNode = best;
+      }
+      if (parentNode) drawLine(parentNode.lat, parentNode.lng, node.lat, node.lng, color);
+    }
+  });
+}
+
+// ── render tier list — grouped by OEM root ───────────────────────────────────
+function renderTierList(tierNum, suppliers) {
+  const sec = document.getElementById('tiersSection');
+  const color = TCOLORS[tierNum-1];
+
+  // Connector
+  const conn = document.createElement('div');
+  conn.className='connector';
+  conn.innerHTML=`<div class="connector-line"></div><span style="color:${color}">TIER ${tierNum}</span><div class="connector-line"></div>`;
+  sec.appendChild(conn);
+
+  // Group suppliers by oem_root
+  const groups = {};
+  suppliers.forEach(s => {
+    const root = s.oem_root || s.supplies_to || 'Unknown OEM';
+    if (!groups[root]) groups[root] = [];
+    groups[root].push(s);
+  });
+
+  let cardIndex = 0;
+  Object.entries(groups).forEach(([oemRoot, groupSuppliers]) => {
+    const block = document.createElement('div');
+    block.className='tier-block';
+    const groupId = `sg-${tierNum}-${oemRoot.replace(/[^a-z0-9]/gi,'_')}`;
+    block.innerHTML=`
+      <div class="tier-header">
+        <div class="tier-badge ${TCLASS[tierNum-1]}">TIER ${tierNum}</div>
+        <div style="font-size:.65rem;color:${color};font-family:'Syne',sans-serif;font-weight:700">▶ ${oemRoot}</div>
+        <div class="tier-count">${groupSuppliers.length} supplier${groupSuppliers.length!==1?'s':''}</div>
+      </div>
+      <div class="supplier-grid" id="${groupId}"></div>`;
+    sec.appendChild(block);
+
+    const grid = document.getElementById(groupId);
+    groupSuppliers.forEach((s) => {
+      const card = document.createElement('div');
+      card.className=`supplier-card ${TCLASS[tierNum-1]}`;
+      card.style.cssText=`opacity:0;animation:slideUp .4s ease ${cardIndex*.04}s forwards`;
+      const cf = s.confidence==='high'?'ch':s.confidence==='medium'?'cm':'cl';
+      const nomap = !s.lat ? '<span class="no-map">no map</span>' : '';
+      const comps = (s.components_supplied||[]).slice(0,4).map(c=>`<span class="ctag">${c}</span>`).join('');
+      card.innerHTML=`
+        <div class="s-name">${s.company_name||'Unknown'}</div>
+        <div class="s-country">${s.country||'—'}</div>
+        ${comps?`<div class="s-comps">${comps}</div>`:''}
+        <div class="s-foot">
+          <div class="s-to">▶ <strong>${s.supplies_to||'—'}</strong></div>
+          <div style="display:flex;gap:5px;align-items:center">${nomap}<span class="cdot ${cf}" title="${s.confidence}"></span></div>
+        </div>`;
+      card.addEventListener('click',()=>{
+        switchTab('map');
+        const n = nodeReg[(s.company_name||'').toLowerCase()];
+        if(n){ lmap.setView([n.lat,n.lng],5,{animate:true}); setTimeout(()=>n.marker.openPopup(),500); }
+      });
+      grid.appendChild(card);
+      cardIndex++;
+    });
+  });
+}
+
+// ── map stats ─────────────────────────────────────────────────────────────────
+function updateStats(sc) {
+  let total=0, countries=new Set();
+  Object.values(sc.tiers||{}).forEach(arr=>arr.forEach(s=>{total++;if(s.country)countries.add(s.country);}));
+  document.getElementById('mapStats').innerHTML=`
+    <div class="stat"><strong>${total}</strong>Total Suppliers</div>
+    <div class="stat"><strong>${countries.size}</strong>Countries</div>
+    <div class="stat"><strong>${Object.keys(sc.tiers||{}).length}</strong>Tier Depth</div>
+    <div class="stat"><strong>${Object.keys(nodeReg).length}</strong>Mapped Nodes</div>`;
+}
+
+// ── reset ─────────────────────────────────────────────────────────────────────
+function reset() {
+  document.getElementById('statusLog').innerHTML='';
+  document.getElementById('statusLog').classList.remove('visible');
+  document.getElementById('productCard').classList.remove('visible');
+  document.getElementById('tiersSection').innerHTML='';
+  document.getElementById('summaryBlock').classList.remove('visible');
+  document.getElementById('emptyStateMap').style.display='';
+  document.getElementById('emptyStateList').style.display='';
+  document.getElementById('mapContainer').style.display='none';
+  document.getElementById('mapStats').innerHTML='';
+  document.getElementById('downloadBar').classList.remove('visible');
+  document.getElementById('btnPdf').disabled=true;
+  document.getElementById('btnWord').disabled=true;
+  document.getElementById('oemSection').classList.remove('visible');
+  document.getElementById('oemGrid').innerHTML='';
+  lastSupplyChain = null;
+  initMap();
+}
+
+// ── download report ───────────────────────────────────────────────────────────
+let lastSupplyChain = null;
+
+async function downloadReport(format) {
+  if (!lastSupplyChain) return;
+  const btn = format==='pdf' ? document.getElementById('btnPdf') : document.getElementById('btnWord');
+  const origText = btn.innerHTML;
+  btn.disabled=true;
+  btn.innerHTML='<span class="spinner"></span>Generating…';
+  try {
+    const resp = await fetch(`${BACKEND}/api/export/${format}`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(lastSupplyChain)
+    });
+    if (!resp.ok) { const err=await resp.json(); alert('Export failed: '+(err.error||'Unknown error')); return; }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const product = lastSupplyChain.product?.product_name||'supply_chain';
+    a.href=url; a.download=`${product.replace(/[^a-zA-Z0-9_-]/g,'_').slice(0,40)}_supply_chain.${format}`; a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { alert('Export failed: '+e.message); }
+  finally { btn.disabled=false; btn.innerHTML=origText; }
+}
+
+// ── load providers ────────────────────────────────────────────────────────────
+async function loadProviders() {
+  try {
+    const res = await fetch(`${BACKEND}/api/providers`);
+    const providers = await res.json();
+    const bar = document.getElementById('providerStatus');
+    const sel = document.getElementById('providerSelect');
+    bar.innerHTML=''; sel.innerHTML='';
+    let firstOk=null;
+    providers.forEach(p => {
+      const dot = p.configured?'ok':'err';
+      bar.innerHTML+=`<div class="provider-badge"><div class="pb-dot ${dot}"></div><strong>${p.name}</strong><span style="color:var(--muted)">${p.configured?'ready':'no key'}</span></div>`;
+      const opt=document.createElement('option');
+      opt.value=p.id; opt.textContent=(p.configured?'✅':'❌')+' '+p.name; opt.disabled=!p.configured;
+      if(p.configured&&!firstOk) firstOk=p.id;
+      sel.appendChild(opt);
+    });
+    const allOption = document.createElement('option');
+    allOption.value = "all"; allOption.textContent=('✅ All Models');
+    allOption.selected = true;
+    sel.append(allOption);
+    if(firstOk) sel.value=firstOk;
+  } catch(e) {
+    document.getElementById('providerStatus').innerHTML='<div class="provider-badge"><div class="pb-dot err"></div>Backend not running</div>';
+  }
+}
+
+
+/**
+ * mergeSupplyChains(existing, incoming, providerName)
+ *
+ * Merges two supply_chain objects from run_pipeline's "complete" event.
+ * Called once per provider in map_all mode.
+ *
+ * Rules:
+ *   - product:  keep existing (first provider wins — it's the same product)
+ *   - oems:     union by company_name (case-insensitive); if same company
+ *               appears in both, append incoming provider's reading to
+ *               record._providers[] rather than overwriting
+ *   - tiers:    same rule per tier key — union by company_name|oem_root,
+ *               append to _providers[] on match
+ *   - summary:  concatenate with provider label separator
+ *   - provider: set to "all"
+ *
+ * Every record gets a _providers array:
+ *   [{ name, confidence, ...fields }]
+ * Single-provider records get a one-element array.
+ * Multi-provider records get one element per provider that reported them —
+ * useful for rendering agreement/disagreement in the UI.
+ */
+function mergeSupplyChains(existing, incoming, providerName) {
+  const tag = (providerName || "unknown").trim();
+
+  // ── helper: stamp _providers onto every record in a list ────────────────
+  function stampProviders(list, extraFields) {
+    list.forEach(record => {
+      const entry = { name: tag };
+      extraFields.forEach(f => { if (record[f] != null) entry[f] = record[f]; });
+      record._providers = [entry];
+    });
+  }
+
+  // ── helper: merge two lists, dedup by matchKey, accumulate _providers ───
+  function mergeLists(baseList, inList, matchKey, providerFields) {
+    const merged = baseList.map(r => ({ ...r }));   // shallow clone each record
+    inList.forEach(inRec => {
+      const inKey = (inRec[matchKey] || "").toLowerCase().trim();
+      const idx   = merged.findIndex(
+        e => (e[matchKey] || "").toLowerCase().trim() === inKey
+      );
+      if (idx === -1) {
+        // New record not seen before — add it with a fresh _providers stamp
+        const stamped = { ...inRec, _providers: [] };
+        const entry   = { name: tag };
+        providerFields.forEach(f => { if (inRec[f] != null) entry[f] = inRec[f]; });
+        stamped._providers.push(entry);
+        merged.push(stamped);
+      } else {
+        // Already exists — append this provider's reading
+        if (!merged[idx]._providers) merged[idx]._providers = [];
+        const entry = { name: tag };
+        providerFields.forEach(f => { if (inRec[f] != null) entry[f] = inRec[f]; });
+        merged[idx]._providers.push(entry);
+
+        // Upgrade confidence if incoming is stronger
+        // (high > medium > low — take the best across providers)
+        const rank = { high: 3, medium: 2, low: 1 };
+        const existingRank = rank[merged[idx].confidence] || 0;
+        const incomingRank = rank[inRec.confidence]       || 0;
+        if (incomingRank > existingRank) {
+          merged[idx].confidence = inRec.confidence;
+        }
+      }
+    });
+    return merged;
+  }
+
+  // ── Base case: no existing data yet ─────────────────────────────────────
+  if (!existing) {
+    const seeded = JSON.parse(JSON.stringify(incoming)); // deep clone
+
+    stampProviders(seeded.oems || [], ["confidence", "notes", "role", "market_share"]);
+
+    Object.keys(seeded.tiers || {}).forEach(tierKey => {
+      stampProviders(
+        seeded.tiers[tierKey],
+        ["confidence", "source_hint", "components_supplied", "supplies_to"]
+      );
+    });
+
+    seeded.summary  = incoming.summary
+      ? `[${tag}]\n${incoming.summary}`
+      : "";
+    seeded.provider = "all";
+    return seeded;
+  }
+
+  // ── Merge into existing ──────────────────────────────────────────────────
+  const result = { ...existing };
+
+  // product — first provider wins; just keep existing
+  result.product = existing.product;
+
+  // oems
+  result.oems = mergeLists(
+    existing.oems || [],
+    incoming.oems || [],
+    "company_name",
+    ["confidence", "notes", "role", "market_share", "country"]
+  );
+
+  // tiers — union of tier keys, merge each independently
+  const allTierKeys = new Set([
+    ...Object.keys(existing.tiers || {}),
+    ...Object.keys(incoming.tiers || {}),
+  ]);
+  result.tiers = {};
+  allTierKeys.forEach(tierKey => {
+    result.tiers[tierKey] = mergeLists(
+      existing.tiers?.[tierKey] || [],
+      incoming.tiers?.[tierKey] || [],
+      "company_name",                        // primary dedupe key
+      ["confidence", "source_hint", "components_supplied", "supplies_to", "oem_root", "country"]
+    );
+  });
+
+  // summary — append with provider label
+  const incomingSummary = incoming.summary
+    ? `[${tag}]\n${incoming.summary}`
+    : "";
+  result.summary = [existing.summary, incomingSummary]
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+
+  result.provider = "all";
+  return result;
+}
+
+// ── main ──────────────────────────────────────────────────────────────────────
+function startMapping() {
+  const product = document.getElementById('productInput').value.trim();
+  const depth = parseInt(document.getElementById('depthSelect').value);
+  if (!product) { document.getElementById('productInput').focus(); return; }
+  if (evtSrc) { evtSrc.close(); evtSrc=null; }
+  reset();
+  const btn=document.getElementById('mapBtn');
+  btn.disabled=true; btn.innerHTML='<span class="spinner"></span>MAPPING…';
+  appendLog(`⚡ Mapping: "${product}" (depth: ${depth})`);
+  // if make new dropdown option for all models, keep this and make if else block, calling respective API based on value
+  const provider=document.getElementById('providerSelect').value;
+  const isAll = provider === "all";
+  if (isAll) evtSrc = new EventSource(`${BACKEND}/api/map_all?product=${encodeURIComponent(product)}&depth=${depth}`);
+  else evtSrc=new EventSource(`${BACKEND}/api/map?product=${encodeURIComponent(product)}&depth=${depth}&provider=${provider}`);
+  let activeProviderName = null;
+  evtSrc.onmessage=e=>{
+    try {
+      const d=JSON.parse(e.data);
+      if (d.type==='status') appendLog(d.message);
+      else if (d.type === 'provider_start') {
+        activeProviderName = d.name;
+        appendLog(d.message);
+      }
+      else if (d.type === 'provider_done') {
+        appendLog(d.message);
+      }
+      else if (d.type==='oem_discovered') {
+        renderOEMs(d.oems);
+      }
+      else if (d.type==='product_identified') {
+        renderProduct(d.product);
+
+      }
+      else if (d.type==='tier_complete') {
+        renderTierMap(d.tier,d.suppliers);
+        renderTierList(d.tier,d.suppliers);
+
+        document.getElementById('downloadBar').classList.add('visible');
+        document.getElementById('btnPdf').disabled=false;
+        document.getElementById('btnWord').disabled=false;
+        document.getElementById('heatControls').style.display='block';
+      }
+      else if (d.type==='complete') {
+        const provName = activeProviderName || provider;
+        lastSupplyChain = mergeSupplyChains(lastSupplyChain, d.supply_chain, provName);
+        // end debug on 13th May
+        if(d.supply_chain?.summary){ document.getElementById('summaryText').textContent=lastSupplyChain.summary; document.getElementById('summaryBlock').classList.add('visible'); }
+        updateStats(lastSupplyChain);
+        fitBounds();
+        document.getElementById('downloadBar').classList.add('visible');
+        document.getElementById('btnPdf').disabled=false;
+        document.getElementById('btnWord').disabled=false;
+        document.getElementById('heatControls').style.display='block';
+        
+      }
+      else if (d.type==='error') { appendLog(`❌ ${d.message}`,false); done(); }
+      else if (d.type==='stream_end') {
+
+        if (isAll && lastSupplyChain) {
+          document.getElementById('tiersSection').innerHTML = '';
+          document.getElementById('oemGrid').innerHTML = '';
+          renderOEMs(lastSupplyChain.oems || []);
+          Object.entries(lastSupplyChain.tiers || {}).forEach(([key, suppliers]) => {
+            const tierNum = parseInt(key.replace('tier_', ''));
+            renderTierList(tierNum, suppliers);
+          });
+          updateStats(lastSupplyChain);
+          fitBounds();
+        }
+
+
+        appendLog('✅ Mapping complete! Use the download buttons to export results.',false);
+        done();
+        evtSrc.close();
+      }
+    } catch(err){console.error(err);}
+  };
+  evtSrc.onerror=()=>{ appendLog('❌ Connection lost. Is app.py running on port 5000?',false); done(); };
+  function done(){ btn.disabled=false; btn.innerHTML='▶ MAP CHAIN'; if(evtSrc){evtSrc.close();evtSrc=null;} }
+}
+
+// event listener for enter
+document.getElementById('productInput').addEventListener('keydown',e=>{if(e.key==='Enter')startMapping();});
+initMap();
+loadProviders();
+</script>
+</body>
+</html>

@@ -20,7 +20,11 @@ import datetime
 import io
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from flask import Response, jsonify
+from flask import Response, jsonify, request, send_file
+import uuid
+import re
+import threading
+import tempfile
 
 app = Flask(__name__)
 CORS(app)
@@ -816,7 +820,7 @@ def write_product_sheet(ws, result: dict):
     product = sc.get("product", {})
 
     ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 320
+    ws.column_dimensions["B"].width = 700
 
     title = ws.cell(row=1, column=1, value=product.get("product_name", result["product_input"]))
     title.font = Font(name=FONT, bold=True, size=13, color="1A237E")
@@ -1045,6 +1049,193 @@ def bulk_export():
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
+# multi-single file exports test
+_export_files = {}
+_export_files_lock = threading.Lock()
+
+def safe_filename(product_input: str, index: int) -> str:
+    clean = re.sub(r'[\\/*?:"<>|]', '', product_input).strip()[:50]
+    return f"{index:02d}_{clean}.xlsx"
+
+def safe_sheet_name(product_input: str, index: int) -> str:
+    clean = re.sub(r'[\\/*?\[\]:]', '', product_input).strip()[:26]
+    return f"{index}_{clean}"
+
+
+@app.route('/dev/multi_single_export')
+def multi_single_export():
+    accept = request.headers.get("Accept", "")
+    if "text/html" in accept:
+        return Response("""<!DOCTYPE html>
+<html>
+<head>
+  <title>Bulk Export</title>
+  <style>
+    body { font-family: monospace; padding: 2rem; background: #111; color: #eee; }
+    .done { color: #4caf50; }
+    .error { color: #f44336; }
+  </style>
+</head>
+<body>
+  <h2>Bulk Export</h2>
+  <div id="log"></div>
+  <script>
+    const log = document.getElementById('log');
+    const append = (msg, cls) => {
+      const d = document.createElement('div');
+      d.className = cls || '';
+      d.textContent = msg;
+      log.appendChild(d);
+    };
+
+    const evtSource = new EventSource('/dev/multi_single_export/stream');
+
+    evtSource.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'start') {
+        append(`Starting export for ${msg.total} products...`);
+      } else if (msg.type === 'file_ready') {
+        append(`[${msg.index}/${msg.total}] ✓ ${msg.filename}`, 'done');
+        const a = document.createElement('a');
+        a.href = `/dev/multi_single_export/download/${msg.file_id}`;
+        a.download = msg.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } else if (msg.type === 'error') {
+        append(`[error] ${msg.product}: ${msg.error}`, 'error');
+      } else if (msg.type === 'done') {
+        append(`All ${msg.total} exports complete.`, 'done');
+        evtSource.close();
+      }
+    };
+
+    evtSource.onerror = () => {
+      append('SSE connection lost.', 'error');
+      evtSource.close();
+    };
+  </script>
+</body>
+</html>""", mimetype="text/html")
+
+    return Response(status=400)
+
+
+@app.route('/dev/multi_single_export/stream')
+def multi_export_stream():
+    def generate():
+        providers = available_providers()
+        products = PRODUCTS_TO_TEST
+        total = len(products)
+
+        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+
+        for i, product_input in enumerate(products, 1):
+            print(f"\n[bulk_export] ── Product {i}/{total}: {product_input}")
+
+            queue = []
+            try:
+                for provider in providers:
+                    print(f"[bulk_export] - Running pipeline for {provider.get('name')}")
+                    run_pipeline(product_input, DEPTH, provider.get("id"), queue)
+            except Exception as e:
+                print(f"[bulk_export] Pipeline error for '{product_input}': {e}")
+                yield f"data: {json.dumps({'type': 'error', 'product': product_input, 'error': str(e)})}\n\n"
+                continue
+
+            # Merge supply chains from all providers
+            supply_chain = None
+            for event in queue:
+                if event.get("type") == "complete":
+                    incoming = event.get("supply_chain", {})
+                    if supply_chain is None:
+                        supply_chain = incoming
+                    else:
+                        existing_oem_names = {
+                            o.get("company_name", "").lower()
+                            for o in supply_chain.get("oems", [])
+                        }
+                        for oem in incoming.get("oems", []):
+                            if oem.get("company_name", "").lower() not in existing_oem_names:
+                                supply_chain["oems"].append(oem)
+
+                        for tier_key, suppliers in incoming.get("tiers", {}).items():
+                            if tier_key not in supply_chain["tiers"]:
+                                supply_chain["tiers"][tier_key] = suppliers
+                            else:
+                                existing_names = {
+                                    s.get("company_name", "").lower()
+                                    for s in supply_chain["tiers"][tier_key]
+                                }
+                                for s in suppliers:
+                                    if s.get("company_name", "").lower() not in existing_names:
+                                        supply_chain["tiers"][tier_key].append(s)
+
+            if not supply_chain:
+                supply_chain = {
+                    "product": {"product_name": product_input},
+                    "oems": [],
+                    "tiers": {}
+                }
+
+            # Build workbook for this product
+            result = [{
+                "product_input": product_input,
+                "supply_chain": supply_chain,
+                "sheet_prefix": safe_sheet_name(product_input, i)
+            }]
+            wb_bytes = build_bulk_workbook(result, "All Providers", DEPTH)
+
+            # Save to temp file
+            file_id = str(uuid.uuid4())
+            filename = safe_filename(product_input, i)
+            tmp_path = os.path.join(tempfile.gettempdir(), f"{file_id}.xlsx")
+
+            with open(tmp_path, "wb") as f:
+                f.write(wb_bytes)
+
+            with _export_files_lock:
+                _export_files[file_id] = {"path": tmp_path, "filename": filename}
+
+            tier_counts = {k: len(v) for k, v in supply_chain.get("tiers", {}).items()}
+            print(f"[bulk_export] Ready: {filename} | oems={len(supply_chain.get('oems', []))} tiers={tier_counts}")
+
+            yield f"data: {json.dumps({'type': 'file_ready', 'file_id': file_id, 'filename': filename, 'index': i, 'total': total})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+
+
+@app.route('/dev/multi_single_export/download/<file_id>')
+def multi_export_download(file_id):
+    with _export_files_lock:
+        entry = _export_files.pop(file_id, None)
+
+    if not entry:
+        return jsonify({"error": "File not found or already downloaded"}), 404
+
+    path = entry["path"]
+    filename = entry["filename"]
+
+    response = send_file(
+        path,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename
+    )
+
+    @response.call_on_close
+    def cleanup():
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    return response
     
 
 @app.route('/api/map_all')
@@ -1075,7 +1266,7 @@ def map_all():
             
 
     threading.Thread(target=run, daemon=True).start()
-
+ 
     def generate():
         sent = 0
         # safer logic to guard against done being set while items are still queued

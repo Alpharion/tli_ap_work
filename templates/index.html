@@ -350,7 +350,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 // GLOBALS
 //const BACKEND = 'http://127.0.0.1:5000';
 const BACKEND = '';
-const TCOLORS = ['#47c8ff','#becf48','#a78bfa','#fb923c','#a78bfa'];
+const TCOLORS = ['#47c8ff','#AA6B39','#a78bfa','#fb923c','#a78bfa'];
 const TCLASS  = ['t1','t2','t3','t4','t5'];
 const PROVIDER_META = {
   anthropic: { label: 'Anthropic Claude', color: '#e8ff47' },
@@ -854,7 +854,7 @@ function mergeSupplyChains(existing, incoming, providerName) {
     });
 
     seeded.summary  = incoming.summary
-      ? `[${tag}]\n${incoming.summary}`
+      ? `\n[${tag}]\n${incoming.summary}`
       : "";
     seeded.provider = "all";
     return seeded;
@@ -891,7 +891,7 @@ function mergeSupplyChains(existing, incoming, providerName) {
 
   // summary — append with provider label
   const incomingSummary = incoming.summary
-    ? `[${tag}]\n${incoming.summary}`
+    ? `\n[${tag}]\n${incoming.summary}`
     : "";
   result.summary = [existing.summary, incomingSummary]
     .filter(Boolean)

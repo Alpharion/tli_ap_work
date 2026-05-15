@@ -405,7 +405,7 @@ def sse(data: dict) -> str:
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
-def run_pipeline(product_input: str, depth: int, provider: str, queue: list):
+def run_pipeline(product_input: str, depth: int, provider: str, queue: list, oem_context: list, collected_tiers: dict):
     def push(t, **kw): queue.append({"type":t,**kw})
 
     search_label = "Google Search" if provider == "gemini" else "DuckDuckGo"
@@ -468,6 +468,17 @@ Return ONLY valid JSON (no markdown) with this exact schema:
         else "No live web search — use your training knowledge."
     )
 
+    existing_note = ""
+    if oem_context:
+        names = ", ".join(oem_context)
+        existing_note = f"""
+    EXISTING COMPANIES ALREADY IN LIST: {names}
+    - If you know any of these companies by a different name, use EXACTLY the name shown above
+    - Do not add duplicates — only add companies genuinely not in this list
+    """
+
+
+
     oem_prompt = f"""You are a supply chain research assistant.
 Product: {product_info.get('product_name')} ({product_info.get('industry')})
 
@@ -482,6 +493,9 @@ CRITICAL COMPANY NAME RULES:
 - Use English names only (e.g. "Panasonic" not "Panasonic Corporation")
 - Be consistent: if a company is known by an acronym (TSMC, BASF, ABB), use the acronym
 - If the name of the company is followed by (), check the contents within the bracket, and if it is another name for the said company, drop the brackets and its contents
+
+{existing_note}
+
 
 CRITICAL: Return ONLY a raw JSON array starting with [ and ending with ].
 Do NOT return a single object. Do NOT wrap in markdown. Do NOT add explanation text.
@@ -542,6 +556,9 @@ List 2-8 significant OEMs as SEPARATE array elements."""
 
     # Geocode OEMs
     for oem in oem_list:
+        name = oem.get("company_name", "")
+        if name and name not in oem_context:
+            oem_context.append(name)
         c = get_coords(oem.get("country",""))
         if c: oem["lat"], oem["lng"] = c
 
@@ -579,7 +596,11 @@ List 2-8 significant OEMs as SEPARATE array elements."""
     # We track parent → oem_root so results stay grouped
     # Structure: list of {"name": str, "oem_root": str}
     previous_parents = [{"name": n.get("name", ""), "oem_root": n.get("name", ""), "confidence": n.get("confidence", "")} for n in oem_names]
-
+    def tier_note(tier_num):
+        key = f"tier_{tier_num}"
+        names = collected_tiers.get(key, [])
+        return f"The following companies are already in the tier {tier_num} list: {', '.join(names)}. For each of the company names, check if it is an alternate name for any of the names in the given list. If you find the same company, use EXACTLY the same name as in the list." if names else ""
+    
     for tier_num in range(1, depth + 1):
         push("status", message=f"🏭 Researching Tier-{tier_num} suppliers…")
         tier_suppliers = []   # all suppliers this tier across all parents
@@ -618,6 +639,7 @@ CRITICAL COMPANY NAME RULES:
 - Use English names only (e.g. "Panasonic" not "Panasonic Corporation")
 - Be consistent: if a company is known by an acronym (TSMC, BASF, ABB), use the acronym
 - If the name of the company is followed by (), check the contents within the bracket, and if it is another name for the said company, drop the brackets and its contents
+{tier_note(tier_num)}
 
 Return ONLY a valid JSON array (no markdown). Each element:
 {{
@@ -660,6 +682,11 @@ List 3-5 distinct real direct suppliers to {parent} specifically. Do NOT mix in 
                 c = get_coords(s.get("country",""))
                 if c: s["lat"], s["lng"] = c
                 unique.append(s)
+        for s in unique:
+            name = s.get('company_name', '')
+            collected_tiers.setdefault(f"tier_{tier_num}", [])
+            if name and name not in collected_tiers[f"tier_{tier_num}"]:
+                collected_tiers[f"tier_{tier_num}"].append(name)
 
         supply_chain["tiers"][f"tier_{tier_num}"] = unique
         push("tier_complete", tier=tier_num, suppliers=unique)
@@ -788,21 +815,19 @@ def write_oem_sheet(ws, results: list[dict]):
 
     row = 2
     for r in results:
-        sc = r.get("supply_chain", {})
-        product_name = sc.get("product", {}).get("product_name", r["product_input"])
-        provider = sc.get("provider", "")
-        for oem in sc.get("oems", []):
-            fill = _row_fill(row)
-            data_cell(ws, row, 1, product_name, bold=True, fill=fill)
-            data_cell(ws, row, 2, oem.get("company_name", ""), fill=fill)
-            data_cell(ws, row, 3, oem.get("country", ""), fill=fill)
-            data_cell(ws, row, 4, oem.get("role", ""), fill=fill)
-            data_cell(ws, row, 5, oem.get("market_share", ""), fill=fill)
-            data_cell(ws, row, 6, oem.get("confidence", ""), fill=fill)
-            data_cell(ws, row, 8, provider, fill=fill)
-            data_cell(ws, row, 7, oem.get("notes", ""), fill=fill)
-
-            row += 1
+        for prov_id, prov_sc in r.get("provider_results", {sc.get("provider","unknown"): sc}).items():
+            product_name = prov_sc.get("product", {}).get("product_name", r["product_input"])
+            for oem in prov_sc.get("oems", []):
+                fill = _row_fill(row)
+                data_cell(ws, row, 1, product_name, bold=True, fill=fill)
+                data_cell(ws, row, 2, oem.get("company_name", ""), fill=fill)
+                data_cell(ws, row, 3, oem.get("country", ""), fill=fill)
+                data_cell(ws, row, 4, oem.get("role", ""), fill=fill)
+                data_cell(ws, row, 5, oem.get("market_share", ""), fill=fill)
+                data_cell(ws, row, 6, oem.get("confidence", ""), fill=fill)
+                data_cell(ws, row, 7, oem.get("notes", ""), fill=fill)
+                data_cell(ws, row, 8, prov_id, fill=fill)
+                row += 1
     
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row - 1}"
@@ -823,24 +848,22 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
 
     row = 2
     for r in results:
-        sc = r.get("supply_chain", {})
-        product_name = sc.get("product", {}).get("product_name", r["product_input"])
-        suppliers = sc.get("tiers", {}).get(tier_key, [])
-        provider = sc.get("provider", "")
-
-        for s in suppliers:
-            fill = _row_fill(row)
-            components = ", ".join(s.get("components_supplied") or [])
-            data_cell(ws, row, 1, product_name, bold=True, fill=fill)
-            data_cell(ws, row, 2, s.get("company_name",""), fill=fill)
-            data_cell(ws, row, 3, s.get("country", ""), fill=fill)
-            data_cell(ws, row, 4, s.get("supplies_to", ""), fill=fill)
-            data_cell(ws, row, 5, s.get("oem_root", ""), fill=fill)
-            data_cell(ws, row, 6, components, fill=fill)
-            data_cell(ws, row, 7, s.get("confidence", ""), fill=fill)
-            data_cell(ws, row, 8, s.get("source_hint", ""), fill=fill)
-            data_cell(ws, row, 9, provider, fill=fill)
-            row +=1
+        for prov_id, prov_sc in r.get("provider_results", {sc.get("provider","unknown"): sc}).items():
+            product_name = prov_sc.get("product", {}).get("product_name", r["product_input"])
+            suppliers = prov_sc.get("tiers", {}).get(tier_key, [])
+            for s in suppliers:
+                fill = _row_fill(row)
+                components = ", ".join(s.get("components_supplied") or [])
+                data_cell(ws, row, 1, product_name, bold=True, fill=fill)
+                data_cell(ws, row, 2, s.get("company_name",""), fill=fill)
+                data_cell(ws, row, 3, s.get("country", ""), fill=fill)
+                data_cell(ws, row, 4, s.get("supplies_to", ""), fill=fill)
+                data_cell(ws, row, 5, s.get("oem_root", ""), fill=fill)
+                data_cell(ws, row, 6, components, fill=fill)
+                data_cell(ws, row, 7, s.get("confidence", ""), fill=fill)
+                data_cell(ws, row, 8, s.get("source_hint", ""), fill=fill)
+                data_cell(ws, row, 9, prov_id, fill=fill)
+                row += 1
     
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row-1}"
@@ -1001,6 +1024,8 @@ def test():
 
 @app.route('/dev/bulk_export')
 def bulk_export():
+    collected_oems = []
+    collected_tiers = {}
     def safe_sheet_name(product_input: str, index: int) -> str:
         """
         Excel sheet names: max 31 chars, no special characters.
@@ -1022,7 +1047,7 @@ def bulk_export():
         try:
             for provider in providers:
                 print(f"\n[bulk_export] - Running pipeline for {provider.get("name")}")
-                run_pipeline(product_input, DEPTH, provider.get("id"), queue)
+                run_pipeline(product_input, DEPTH, provider.get("id"), queue, collected_oems, collected_tiers)
         except Exception as e:
             print(f"[bulk_export] Pipeline error for '{product_input}': {e}")
             results.append({
@@ -1159,6 +1184,8 @@ def multi_single_export():
 @app.route('/dev/multi_single_export/stream')
 def multi_export_stream():
     def generate():
+        collected_oems = []
+        collected_tiers = {}
         providers = available_providers()
         products = PRODUCTS_TO_TEST
         total = len(products)
@@ -1171,52 +1198,49 @@ def multi_export_stream():
             queue = []
             try:
                 for provider in providers:
+                    if not provider.get("configured"):
+                        print(f"[bulk_export] Skipping {provider.get('name')} — no API key")
+                        continue
                     print(f"[bulk_export] - Running pipeline for {provider.get('name')}")
-                    run_pipeline(product_input, DEPTH, provider.get("id"), queue)
+                    run_pipeline(product_input, DEPTH, provider.get("id"), queue, collected_oems, collected_tiers)
             except Exception as e:
                 print(f"[bulk_export] Pipeline error for '{product_input}': {e}")
                 yield f"data: {json.dumps({'type': 'error', 'product': product_input, 'error': str(e)})}\n\n"
                 continue
 
             # Merge supply chains from all providers
-            supply_chain = None
+            provider_results = {}
             for event in queue:
                 if event.get("type") == "complete":
-                    incoming = event.get("supply_chain", {})
-                    if supply_chain is None:
-                        supply_chain = incoming
-                    else:
-                        existing_oem_names = {
-                            o.get("company_name", "").lower()
-                            for o in supply_chain.get("oems", [])
-                        }
-                        for oem in incoming.get("oems", []):
-                            if oem.get("company_name", "").lower() not in existing_oem_names:
-                                supply_chain["oems"].append(oem)
+                    sc = event.get("supply_chain", {})
+                    prov = sc.get("provider", "unknown")
+                    if sc.get("oems") or sc.get("tiers"):  # only store if it has data
+                        provider_results[prov] = sc
 
-                        for tier_key, suppliers in incoming.get("tiers", {}).items():
-                            if tier_key not in supply_chain["tiers"]:
-                                supply_chain["tiers"][tier_key] = suppliers
-                            else:
-                                existing_names = {
-                                    s.get("company_name", "").lower()
-                                    for s in supply_chain["tiers"][tier_key]
-                                }
-                                for s in suppliers:
-                                    if s.get("company_name", "").lower() not in existing_names:
-                                        supply_chain["tiers"][tier_key].append(s)
+            # derive a merged supply_chain for the index sheet counts
+            supply_chain = {"product": {}, "oems": [], "tiers": {}}
+            for sc in provider_results.values():
+                if not supply_chain["product"]:
+                    supply_chain["product"] = sc.get("product", {})
+                for oem in sc.get("oems", []):
+                    existing = [o.get("company_name","").lower() for o in supply_chain["oems"]]
+                    if oem.get("company_name","").lower() not in existing:
+                        supply_chain["oems"].append(oem)
+                for tier_key, suppliers in sc.get("tiers", {}).items():
+                    supply_chain["tiers"].setdefault(tier_key, [])
+                    existing = [s.get("company_name","").lower() for s in supply_chain["tiers"][tier_key]]
+                    for s in suppliers:
+                        if s.get("company_name","").lower() not in existing:
+                            supply_chain["tiers"][tier_key].append(s)
 
-            if not supply_chain:
-                supply_chain = {
-                    "product": {"product_name": product_input},
-                    "oems": [],
-                    "tiers": {}
-                }
+            if not supply_chain["product"]:
+                supply_chain["product"] = {"product_name": product_input}
 
             # Build workbook for this product
             result = [{
                 "product_input": product_input,
                 "supply_chain": supply_chain,
+                "provider_results": provider_results,   
                 "sheet_prefix": safe_sheet_name(product_input, i)
             }]
             wb_bytes = build_bulk_workbook(result, "All Providers", DEPTH)
@@ -1275,6 +1299,8 @@ def multi_export_download(file_id):
 
 @app.route('/api/map_all')
 def map_all():
+    collected_oems = []
+    collected_tiers = {}
     providers = available_providers()
     product = request.args.get("product", "").strip()
     depth    = max(0, min(int(request.args.get("depth", 2)), 3))
@@ -1293,7 +1319,7 @@ def map_all():
                 else:
                     provider_id = provider.get("id")
                     queue.append({"type": "provider_start", "provider": provider["id"], "name": provider["name"], "message": f"Starting Pipeline with {provider['name']}" });
-                    run_pipeline(product, depth, provider_id, queue)
+                    run_pipeline(product, depth, provider_id, queue, collected_oems, collected_tiers)
                     queue.append({"type": "provider_done", "provider": provider["id"], "name": provider["name"], "message": f"{provider['name']} pipeline complete."})   
             queue.append({"type": "status", "message": "✅ Completed series of pipeline executions."})
         except Exception as e: queue.append({"type":"error","message":str(e)})
@@ -1334,7 +1360,7 @@ def map_suppliers():
     queue, done = [], threading.Event()
 
     def run():
-        try: run_pipeline(product, depth, provider, queue)
+        try: run_pipeline(product, depth, provider, queue, [], {})
         except Exception as e: queue.append({"type":"error","message":str(e)})
         finally: done.set()
 

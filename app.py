@@ -456,6 +456,13 @@ Product: {product_info.get('product_name')} ({product_info.get('industry')})
 Find ALL known OEM manufacturers / brands that produce or sell this product or equivalent products.
 Include the primary OEM already identified ({product_info.get('oem_manufacturer')}) plus any others.
 
+CRITICAL COMPANY NAME RULES:
+- Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")
+- No legal suffixes: drop Inc, Ltd, LLC, GmbH, Co., Corp, Group, Holdings
+- Use English names only (e.g. "Panasonic" not "Panasonic Corporation")
+- Be consistent: if a company is known by an acronym (TSMC, BASF, ABB), use the acronym
+- If the name of the company is followed by (), check the contents within the bracket, and if it is another name for the said company, drop the brackets and its contents
+
 CRITICAL: Return ONLY a raw JSON array starting with [ and ending with ].
 Do NOT return a single object. Do NOT wrap in markdown. Do NOT add explanation text.
 Each OEM must be a SEPARATE element in the array.
@@ -584,6 +591,12 @@ OEM root: {oem_root}
 Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components to: {parent}
 
 {evidence_note}
+
+CRITICAL COMPANY NAME RULES:
+- Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")
+- No legal suffixes: drop Inc, Ltd, LLC, GmbH, Co., Corp, Group, Holdings
+- Use English names only (e.g. "Panasonic" not "Panasonic Corporation")
+- Be consistent: if a company is known by an acronym (TSMC, BASF, ABB), use the acronym
 
 Return ONLY a valid JSON array (no markdown). Each element:
 {{

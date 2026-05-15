@@ -83,8 +83,28 @@ COUNTRY_COORDS = {
 """
 
 PRODUCTS_TO_TEST = [
+    "Fentanyl Citrate 800mg Oral Transmucosal",
+    "Morphine Sulphate 10mg auto injector",
+    "Pralidoxime and Atropine, 600mg pralidoxime Chloride and at least 2mg Atropine Sulphate, Intramuscular Auto-Injector",
+    "Obidoxime and Atropine, 220mg Obidoxime Dichloride and 2mg Atropine through Intramuscular Auto-Injector",
+    "Diazepam 10mg Intramuscular auto-injector",
+    "Midazolam 10mg intramuscular auto-injector",
+    "Modafinil tablet 100mg",
+    "Caffeine tablet 200mg",
+    "Drone (mini class, weight <=5, size <=450mm) body frame",
+    "Drone (mini class, weight <=5, size <=450mm) Propeller",
     "Drone (mini class, weight <=5, size <=450mm) DC Brushless Motor ",
-    "Fentanyl Citrate 800mg Oral Transmucosal"
+    "Drone (mini class, weight <=5, size <=450mm) Electric Speed Controller",
+    "Drone (mini class, weight <=5, size <=450mm) Flight Processing Controller",
+    "Drone (mini class, weight <=5, size <=450mm) Radio Receiver and Transmitter",
+    "Drone (mini class, weight <=5, size <=450mm) Antenna",
+    "Drone (mini class, weight <=5, size <=450mm) Camera with Gimbal",
+    "Drone (mini class, weight <=5, size <=450mm) Ground Controlling Unit",
+    "Drone (mini class, weight <=5, size <=450mm) GPS",
+    "Lithium ion battery 18650 cylindrical",
+    "Lithium ion battery 21700 cylindrical",
+    "Lithium ion battery 4680 cylindrical",
+"Lithium polymer batter pouch cell"
 ]
 
 DEPTH    = 3       # supply chain depth per product (1–3)
@@ -597,6 +617,7 @@ CRITICAL COMPANY NAME RULES:
 - No legal suffixes: drop Inc, Ltd, LLC, GmbH, Co., Corp, Group, Holdings
 - Use English names only (e.g. "Panasonic" not "Panasonic Corporation")
 - Be consistent: if a company is known by an acronym (TSMC, BASF, ABB), use the acronym
+- If the name of the company is followed by (), check the contents within the bracket, and if it is another name for the said company, drop the brackets and its contents
 
 Return ONLY a valid JSON array (no markdown). Each element:
 {{
@@ -632,7 +653,8 @@ List 3-5 distinct real direct suppliers to {parent} specifically. Do NOT mix in 
         # Deduplicate by (company_name + oem_root) — same company can appear under different OEMs
         seen, unique = set(), []
         for s in tier_suppliers:
-            key = f"{s.get('company_name','').strip().lower()}|{s.get('oem_root','')}"
+            #key = f"{s.get('company_name','').strip().lower()}|{s.get('oem_root','')}"
+            key = s.get('company_name', '').strip().lower()
             if key and key not in seen:
                 seen.add(key)
                 c = get_coords(s.get("country",""))

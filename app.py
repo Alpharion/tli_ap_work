@@ -794,7 +794,7 @@ def write_oem_sheet(ws, results: list[dict]):
     One consolidated OEM sheet across all products.
     Columns: Product | Company | Country | Role | Market Share | Confidence | Notes
     """
-    headers = ["Product", "Company Name", "Country", "Role", "Market Share", "Confidence", "AI Provider", "Notes"]
+    headers = ["Product", "Company Name", "Country", "Role", "Market Share", "Confidence", "Notes", "AI Provider"]
     col_widths = [28, 26, 14, 22, 12, 11, 35]
     set_col_widths(ws, col_widths)
 

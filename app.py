@@ -766,6 +766,15 @@ def write_index_sheet(ws, results: list[dict], run_meta: dict):
     for ri, r in enumerate(results, tbl_start + 1):
         sc = r.get("supply_chain", {})
         fill = _row_fill(ri)
+
+        product = sc.get("product", {})
+        if not product.get('product_name'):
+            for prov_sc in r.get('provider_results', {}).values():
+                p = prov_sc.get('product', {})
+                if p.get('product_name'):
+                    product = p
+                    break
+        
         data_cell(ws, ri, 1, r["product_input"], fill=fill, bold=True)
         data_cell(ws, ri, 2, sc.get("product", {}).get("product_name","—"), fill=fill)
         data_cell(ws, ri, 3, sc.get("product", {}).get("industry","—"), fill=fill)
@@ -865,8 +874,6 @@ def write_product_sheet(ws, result: dict):
             product = p
             break
     
-    first_sc = next(iter(provider_results.values()), {})
-    product = first_sc.get("product", {})
 
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 70

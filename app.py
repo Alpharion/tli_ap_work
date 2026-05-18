@@ -815,7 +815,7 @@ def write_oem_sheet(ws, results: list[dict]):
 
     row = 2
     for r in results:
-        for prov_id, prov_sc in r.get("provider_results", {sc.get("provider","unknown"): sc}).items():
+        for prov_id, prov_sc in r.get("provider_results", {r.get("provider","unknown"): r.get("supply_chain", {})}).items():
             product_name = prov_sc.get("product", {}).get("product_name", r["product_input"])
             for oem in prov_sc.get("oems", []):
                 fill = _row_fill(row)
@@ -848,7 +848,7 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
 
     row = 2
     for r in results:
-        for prov_id, prov_sc in r.get("provider_results", {sc.get("provider","unknown"): sc}).items():
+        for prov_id, prov_sc in r.get("provider_results", {r.get("provider","unknown"): r.get("supply_chain", {})}).items():
             product_name = prov_sc.get("product", {}).get("product_name", r["product_input"])
             suppliers = prov_sc.get("tiers", {}).get(tier_key, [])
             for s in suppliers:
@@ -870,100 +870,106 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
 
 
 def write_product_sheet(ws, result: dict):
-    """
-    Detailed sheet for a single product — product info + all tiers stacked vertically.
-    Used as a per-product drill-down.
-    """
-    sc = result.get("supply_chain", {})
-    product = sc.get("product", {})
+    provider_results = result.get("provider_results", {})
+    
+    # Fallback: wrap supply_chain as a single-provider result if no provider_results
+    if not provider_results:
+        sc = result.get("supply_chain", {})
+        provider_results = {sc.get("provider", "unknown"): sc}
+
+    # Use the first result's product info for the sheet title/overview
+    first_sc = next(iter(provider_results.values()), {})
+    product = first_sc.get("product", {})
 
     ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 700
+    ws.column_dimensions["B"].width = 70
 
     title = ws.cell(row=1, column=1, value=product.get("product_name", result["product_input"]))
     title.font = Font(name=FONT, bold=True, size=13, color="1A237E")
-
     ws.merge_cells("A1:B1")
 
-    # Product Overview Block
     overview_fields = [
-        ("Category", product.get("product_category", "")),
-        ("Industry", product.get("industry", "")),
-        ("OEM Manufacturer", product.get("oem_manufacturer", "")),
-        ("OEM Country", product.get("oem_country", "")),
-        ("Key Components", ", ".join(product.get("key_components") or [])),
-        ("Description", product.get("description", "")),
+        ("Category",        product.get("product_category", "")),
+        ("Industry",        product.get("industry", "")),
+        ("OEM Manufacturer",product.get("oem_manufacturer", "")),
+        ("OEM Country",     product.get("oem_country", "")),
+        ("Key Components",  ", ".join(product.get("key_components") or [])),
+        ("Description",     product.get("description", "")),
     ]
-
     for r_idx, (label, value) in enumerate(overview_fields, 3):
         data_cell(ws, r_idx, 1, label, bold=True, fill=_fill("E8EAF6"))
         data_cell(ws, r_idx, 2, value)
         ws.row_dimensions[r_idx].height = 90
 
-    # Summary
-    summary_row = len(overview_fields) + 4
-    ws.cell(row=summary_row, column=1, value="Executive Summary").font = Font(name=FONT, bold=True, size=11, color="1A237E")
-    ws.merge_cells(f"A{summary_row}:B{summary_row}")
-    summary_row += 1
-    summary_cell = ws.cell(row=summary_row, column=1, value=sc.get("summary", "No summary generated."))
-    summary_cell.font = _font()
-    summary_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(f"A{summary_row}:B{summary_row}")
-    ws.row_dimensions[summary_row].height = 50
+    current_row = len(overview_fields) + 5
 
-    # Tier tables
-    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint", "AI Provider"]
-    tier_widths = [28, 14, 22, 20, 32, 11, 35]
-    provider = sc.get("provider", "")
+    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint"]
+    tier_widths  = [28, 14, 22, 20, 32, 11, 35]
 
-    current_row = summary_row + 2
-    for ti, (tier_key, suppliers) in enumerate(sc.get("tiers", {}).items()):
-        tier_num = ti + 1
-        hdr_fill = HDR_TIER[ti] if ti < len(HDR_TIER) else _fill("37474F")
-        tier_label = tier_key.replace("_", " ").upper()
+    # ── One section per provider ──────────────────────────────────────────────
+    for prov_id, sc in provider_results.items():
 
-        # Tier Section Heading
-        heading = ws.cell(row=current_row, column=1, value=f"{tier_label} ({len(suppliers)} suppliers)")
-        heading.font = Font(name=FONT, bold=True, size=11, color="FFFFFF")
-        heading.fill = hdr_fill
-        ws.merge_cells(f"A{current_row}:H{current_row}")
+        # Provider heading
+        prov_heading = ws.cell(row=current_row, column=1, value=f"Provider: {prov_id.upper()}")
+        prov_heading.font = Font(name=FONT, bold=True, size=12, color="FFFFFF")
+        prov_heading.fill = _fill("37474F")
+        ws.merge_cells(f"A{current_row}:G{current_row}")
         ws.row_dimensions[current_row].height = 22
         current_row += 1
 
-        # Set widths on first tier, will auto apply to the rest of the sheet
-        if ti == 0:
-            for ci, w in enumerate(tier_widths, 1):
-                ws.column_dimensions[get_column_letter(ci)].width = w
-        
-        # Column Headers
-        for ci, h in enumerate(tier_headers, 1):
-            hdr_cell(ws, current_row, ci, h, hdr_fill)
-            ws.row_dimensions[current_row].height = 20
-        
-        # increment row by 1 before filling up suppliers
-        current_row += 1
-            
-        
-        if not suppliers:
-            ws.cell(row=current_row, column=1, value="No suppliers identified")
-            current_row += 2
-            continue
+        # Executive summary for this provider
+        summary_cell = ws.cell(row=current_row, column=1, value=sc.get("summary", "No summary generated."))
+        summary_cell.font = _font()
+        summary_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        ws.merge_cells(f"A{current_row}:G{current_row}")
+        ws.row_dimensions[current_row].height = 50
+        current_row += 2
 
-        for s in suppliers:
-            fill = _row_fill(current_row)
-            data_cell(ws, current_row, 1, s.get("company_name", ""), bold=True, fill=fill)
-            data_cell(ws, current_row, 2, s.get("country", ""), bold=True, fill=fill)
-            data_cell(ws, current_row, 3, s.get("supplies_to", ""), fill=fill)
-            data_cell(ws, current_row, 4, s.get("oem_root", ""), fill=fill)
-            data_cell(ws, current_row, 5, ", ".join(s.get("components_supplied") or []), fill=fill)
-            data_cell(ws, current_row, 6, s.get("confidence", ""), fill=fill)
-            data_cell(ws, current_row, 7, s.get("source_hint", ""), fill=fill)
-            data_cell(ws, current_row, 8, provider, fill=fill)
-            ws.row_dimensions[current_row].height = 80
+        for ti, (tier_key, suppliers) in enumerate(sc.get("tiers", {}).items()):
+            tier_num  = ti + 1
+            hdr_fill  = HDR_TIER[ti] if ti < len(HDR_TIER) else _fill("37474F")
+            tier_label = tier_key.replace("_", " ").upper()
+
+            # Set col widths once
+            if ti == 0 and prov_id == next(iter(provider_results)):
+                for ci, w in enumerate(tier_widths, 1):
+                    ws.column_dimensions[get_column_letter(ci)].width = w
+
+            # Tier heading
+            heading = ws.cell(row=current_row, column=1,
+                               value=f"{tier_label} ({len(suppliers)} suppliers)")
+            heading.font = Font(name=FONT, bold=True, size=11, color="FFFFFF")
+            heading.fill = hdr_fill
+            ws.merge_cells(f"A{current_row}:G{current_row}")
+            ws.row_dimensions[current_row].height = 22
             current_row += 1
 
-        current_row += 1 # Spacing between tiers
+            # Column headers
+            for ci, h in enumerate(tier_headers, 1):
+                hdr_cell(ws, current_row, ci, h, hdr_fill)
+            ws.row_dimensions[current_row].height = 20
+            current_row += 1
 
+            if not suppliers:
+                ws.cell(row=current_row, column=1, value="No suppliers identified")
+                current_row += 2
+                continue
+
+            for s in suppliers:
+                fill = _row_fill(current_row)
+                data_cell(ws, current_row, 1, s.get("company_name", ""), bold=True, fill=fill)
+                data_cell(ws, current_row, 2, s.get("country", ""),       fill=fill)
+                data_cell(ws, current_row, 3, s.get("supplies_to", ""),   fill=fill)
+                data_cell(ws, current_row, 4, s.get("oem_root", ""),      fill=fill)
+                data_cell(ws, current_row, 5, ", ".join(s.get("components_supplied") or []), fill=fill)
+                data_cell(ws, current_row, 6, s.get("confidence", ""),    fill=fill)
+                data_cell(ws, current_row, 7, s.get("source_hint", ""),   fill=fill)
+                ws.row_dimensions[current_row].height = 60
+                current_row += 1
+
+            current_row += 1  # spacing between tiers
+
+        current_row += 2  # spacing between providers
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WORKBOOK BUILDER

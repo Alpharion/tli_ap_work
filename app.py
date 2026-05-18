@@ -857,7 +857,14 @@ def write_product_sheet(ws, result: dict):
         sc = result.get("supply_chain", {})
         provider_results = {sc.get("provider", "unknown"): sc}
 
-    # Use the first result's product info for the sheet title/overview
+    # Use the first valid result's product info for the sheet title/overview
+    product = {}
+    for sc in provider_results.values():
+        p = sc.get('product', {})
+        if p.get('product_name'):
+            product = p
+            break
+    
     first_sc = next(iter(provider_results.values()), {})
     product = first_sc.get("product", {})
 

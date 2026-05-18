@@ -468,9 +468,9 @@ Include the primary OEM already identified ({product_info.get('oem_manufacturer'
 
 ELIGIBILITY CRITERIA — a company must meet ALL of the following to be included:
 - Currently active and operating as of 2024
-- Has been actively manufacturing or producing {product_info.get('product_name')} within the last 5 years ({datetime.now().year-5} - {datetime.now().year})
+- Has been actively manufacturing or producing {product_info.get('product_name')} within the last 5 years ({datetime.datetime.now().year-5} - {datetime.datetime.now().year})
 - Has demonstrable, documented manufacturing activity — not just distribution, reselling, or licensing
-- Exclude any company that has ceased production, been acquired and shut down, or exited the market before {datetime.now().year-5}
+- Exclude any company that has ceased production, been acquired and shut down, or exited the market before {datetime.datetime.now().year-5}
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")
@@ -619,9 +619,9 @@ Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components 
 {evidence_note}
 ELIGIBILITY CRITERIA — a company must meet ALL of the following to be included:
 - Currently active and operating as of 2024
-- Has been actively manufacturing or producing {product_info.get('product_name')} within the last 5 years ({datetime.now().year-5} - {datetime.now().year})
+- Has been actively manufacturing or producing {product_info.get('product_name')} within the last 5 years ({datetime.datetime.now().year-5} - {datetime.datetime.now().year})
 - Has demonstrable, documented manufacturing activity — not just distribution, reselling, or licensing
-- Exclude any company that has ceased production, been acquired and shut down, or exited the market before {datetime.now().year-5}
+- Exclude any company that has ceased production, been acquired and shut down, or exited the market before {datetime.datetime.now().year-5}
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")

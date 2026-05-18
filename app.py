@@ -768,10 +768,10 @@ def write_index_sheet(ws, results: list[dict], run_meta: dict):
         fill = _row_fill(ri)
 
         product = sc.get("product", {})
-        if not product.get('product_name'):
+        if not product.get('product_name') or product.get('industry', 'Unkown') == 'Unknown':
             for prov_sc in r.get('provider_results', {}).values():
                 p = prov_sc.get('product', {})
-                if p.get('product_name'):
+                if p.get('product_name') and p.get('industry') != 'Unknown':
                     product = p
                     break
         
@@ -870,7 +870,7 @@ def write_product_sheet(ws, result: dict):
     product = {}
     for sc in provider_results.values():
         p = sc.get('product', {})
-        if p.get('product_name'):
+        if p.get('product_name') and p.get('industry') != "Unknown":
             product = p
             break
     

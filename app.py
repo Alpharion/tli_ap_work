@@ -83,8 +83,7 @@ COUNTRY_COORDS = {
 """
 
 PRODUCTS_TO_TEST = [
-    "Fentanyl Citrate 800mg Oral Transmucosal",
-    
+    "Caffeine tablet 200mg",
 ]
 
 DEPTH    = 3       # supply chain depth per product (1–3)
@@ -466,6 +465,8 @@ Product: {product_info.get('product_name')} ({product_info.get('industry')})
 
 Find ALL known OEM manufacturers / brands that produce or sell this product or equivalent products.
 Include the primary OEM already identified ({product_info.get('oem_manufacturer')}) plus any others.
+These companies should be active within the last 5 years in the relevant industry and known to manufacture 
+{product_info.get('product_name')} within these last 5 years as well.
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")
@@ -612,6 +613,7 @@ OEM root: {oem_root}
 Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components to: {parent}
 
 {evidence_note}
+These companies should be active within the last 5 years in the relevant industry.
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")

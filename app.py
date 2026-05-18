@@ -83,7 +83,7 @@ COUNTRY_COORDS = {
 """
 
 PRODUCTS_TO_TEST = [
-    "Caffeine tablet 200mg",
+    "Fentanyl Citrate 800mg Oral Transmucosal",
 ]
 
 DEPTH    = 3       # supply chain depth per product (1–3)
@@ -465,8 +465,12 @@ Product: {product_info.get('product_name')} ({product_info.get('industry')})
 
 Find ALL known OEM manufacturers / brands that produce or sell this product or equivalent products.
 Include the primary OEM already identified ({product_info.get('oem_manufacturer')}) plus any others.
-These companies should be active within the last 5 years in the relevant industry and known to manufacture 
-{product_info.get('product_name')} within these last 5 years as well.
+
+ELIGIBILITY CRITERIA — a company must meet ALL of the following to be included:
+- Currently active and operating as of 2024
+- Has been actively manufacturing or producing {product_info.get('product_name')} within the last 5 years ({datetime.now().year-5} - {datetime.now().year})
+- Has demonstrable, documented manufacturing activity — not just distribution, reselling, or licensing
+- Exclude any company that has ceased production, been acquired and shut down, or exited the market before {datetime.now().year-5}
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")
@@ -613,7 +617,11 @@ OEM root: {oem_root}
 Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components to: {parent}
 
 {evidence_note}
-These companies should be active within the last 5 years in the relevant industry.
+ELIGIBILITY CRITERIA — a company must meet ALL of the following to be included:
+- Currently active and operating as of 2024
+- Has been actively manufacturing or producing {product_info.get('product_name')} within the last 5 years ({datetime.now().year-5} - {datetime.now().year})
+- Has demonstrable, documented manufacturing activity — not just distribution, reselling, or licensing
+- Exclude any company that has ceased production, been acquired and shut down, or exited the market before {datetime.now().year-5}
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")

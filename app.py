@@ -579,8 +579,8 @@ List 2-8 significant OEMs as SEPARATE array elements."""
 
     # For tier 1: each parent IS an OEM; for tier 2+: parents are tier-1 suppliers
     # We track parent → oem_root so results stay grouped
-    # Structure: list of {"name": str, "oem_root": str}
-    previous_parents = [{"name": n.get("name", ""), "oem_root": n.get("name", ""), "confidence": n.get("confidence", "")} for n in oem_names]
+    # Structure: list of {"name": str, "oem_root": str, "confidence": int, "parent": str}
+    previous_parents = [{"name": n.get("name", ""), "oem_root": n.get("name", ""), "confidence": n.get("confidence", ""), "parent": n.get("name", "")} for n in oem_names]
     def tier_note(tier_num):
         key = f"tier_{tier_num}"
         names = collected_tiers.get(key, [])
@@ -591,7 +591,19 @@ List 2-8 significant OEMs as SEPARATE array elements."""
         tier_suppliers = []   # all suppliers this tier across all parents
         next_parents   = []   # feeds into next tier loop
         # If need to sort or ensure got all 3 tiers of confidence, sort here before looping
-        for parent_info in previous_parents[:6]:  # max 6 parents per tier
+        # Maintain count of suppliers to each parent, cap at 4 per parent
+        if tier_num > 1:
+            lookup_dict = {}
+            filtered = []
+            for entry in previous_parents:
+                parent = entry.get('parent', '')
+                count = lookup_dict.get(parent, 0)
+                if count < 4:
+                    lookup_dict[parent] = count + 1
+                    filtered.append(entry)
+            previous_parents = filtered
+
+        for parent_info in previous_parents:  
             parent    = parent_info["name"]
             oem_root  = parent_info["oem_root"]
             if not parent or parent.lower() == "unknown":
@@ -657,11 +669,11 @@ List 3-5 distinct real direct suppliers to {parent} specifically. Do NOT mix in 
                         sname = s.get("company_name","").strip()
                         if sname and sname.lower() != "unknown":
                             # added confidence level so can sort if in production, looking for more variety
-                            next_parents.append({"name": sname, "oem_root": oem_root, "confidence": s.get("confidence")})
-                    previous_parents = next_parents # assign next_parents back to loop
+                            next_parents.append({"name": sname, "oem_root": oem_root, "confidence": s.get("confidence"), "parent": s.get("supplies_to")})
+                    
             except Exception as e:
                 push("status", message=f"  ⚠️ Parse error tier {tier_num} [{parent}]: {e}")
-
+        previous_parents = next_parents # assign next_parents back to loop
         # Deduplicate by (company_name + oem_root) — same company can appear under different OEMs
         seen, unique = set(), []
         for s in tier_suppliers:

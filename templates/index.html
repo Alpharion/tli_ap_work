@@ -426,10 +426,13 @@ function initMap() {
   if (lmap) { lmap.remove(); lmap = null; }
   Object.keys(nodeReg).forEach(k => delete nodeReg[k]);
   Object.keys(tierNodes).forEach(k => delete tierNodes[k]);
+  edgeReg.length = 0;
+  focusedNode = null;
   oemMarker = null;
   resetHeatPoints();
 
   lmap = L.map('map', { center:[20,10], zoom:2, zoomControl:true });
+  lmap.on('click', () => clearFocus());
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution:'© <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
     maxZoom:18
@@ -442,6 +445,7 @@ function addNode(lat, lng, label, color, tier, popupHtml, jitter=true) {
   const jlat = jitter ? lat + (Math.random()-.5)*1.5 : lat;
   const jlng = jitter ? lng + (Math.random()-.5)*1.5 : lng;
   const r = tier===0 ? 10 : Math.max(6, 9-tier*1.5);
+  const key = label.toLowerCase();
   const m = L.circleMarker([jlat, jlng], {
     radius: r,
     fillColor: color,
@@ -451,14 +455,53 @@ function addNode(lat, lng, label, color, tier, popupHtml, jitter=true) {
   }).addTo(lmap);
   m.bindPopup(popupHtml, {maxWidth:270});
   m.bindTooltip(label, {direction:'top'});
+  m.on('click', () => focusNode(key));
   return { marker:m, lat:jlat, lng:jlng };
 }
 
-function drawLine(fromLat, fromLng, toLat, toLng, color) {
+const edgeReg = [];
+let focusedNode = null;
+
+function drawLine(fromLat, fromLng, toLat, toLng, color, fromKey, toKey) {
   if (!lmap) return;
-  L.polyline([[fromLat,fromLng],[toLat,toLng]], {
-    color, weight:1.5, opacity:.55, dashArray:'5 7'
+  const line = L.polyline([[fromLat, fromLng], [toLat, toLng]], {
+    color, weight:1.5, opacity:55, dashArray:'5 7'
   }).addTo(lmap);
+  edgeReg.push({line, fromKey, toKey});
+}
+
+function focusNode(key) {
+  if (focusedNode === key) {clearFocus(); return; }
+  
+  focusedNode = key;
+  const connected = new Set([key]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    edgeReg.forEach (e => {
+      if (connected.has(e.fromKey) && !connected.has(e.toKey)) {connected.add(e.toKey); changed=true; }
+      if (connected.has(e.toKey) && !connected.has(e.fromKey)) {connected.add(e.fromKey); changed=true;}
+    });
+  }
+
+  edgeReg.forEach(e => {
+    const active = connected.has(e.fromKey) && connected.has(e.toKey);
+    e.line.setStyle({ opacity: active ? 0.85 : 0.05, weight: active ? 2.5 : 1});
+  });
+
+  Object.entries(nodeReg).forEach(([k, n]) => {
+    if (!n?.marker) return;
+    n.marker.setStyle({ fillOpactiy: connected.has(k) ? 0.95 : 0.1, opacity: connected.has(k) ? 1 : 0.15 });
+  });
+}
+
+function clearFocus() {
+  focusedNode = null;
+  edgeReg.forEach(e => e.line.setStyle( { opacity: 0.55, weight: 1.5 })); // change back to default
+  Object.values(nodeReg).forEach(n => {
+    if (!n?.marker) return;
+    n.marker.setStyle({ fillOpacity: 0.9, opacity: 1 });
+  });
 }
 
 function fitBounds() {
@@ -613,7 +656,11 @@ function renderTierMap(tierNum, suppliers) {
         }
         parentNode = best;
       }
-      if (parentNode) drawLine(parentNode.lat, parentNode.lng, node.lat, node.lng, color);
+      if (parentNode) {
+        const parentKey = Object.keys(nodeReg).find(k => nodeReg[k] === parentNode) || '';
+        drawLine(parentNode.lat, parentNode.lng, node.lat, node.lng, color, parentKey, s.company_name.toLowerCase());
+
+      }
     }
   });
 }

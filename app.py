@@ -58,6 +58,12 @@ COUNTRY_COORDS = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
+"Tank Ammunition 120mm",
+"Tank Ammunition 125mm",
+"Lithium ion battery 18650 cylindrical",
+"Lithium ion battery 21700 cylindrical",
+"Lithium ion battery 4680 cylindrical",
+"Lithium polymer batter pouch cell"
 "Fentanyl Citrate 800mg Oral Transmucosal",
 "Morphine Sulphate 10mg auto injector",
 "Pralidoxime and Atropine, 600mg pralidoxime Chloride and at least 2mg Atropine Sulphate, Intramuscular Auto-Injector",
@@ -76,17 +82,20 @@ COUNTRY_COORDS = {
 "Drone (mini class, weight <=5, size <=450mm) Camera with Gimbal",
 "Drone (mini class, weight <=5, size <=450mm) Ground Controlling Unit",
 "Drone (mini class, weight <=5, size <=450mm) GPS",
-"Lithium ion battery 18650 cylindrical",
-"Lithium ion battery 21700 cylindrical",
-"Lithium ion battery 4680 cylindrical",
-"Lithium polymer batter pouch cell"
+
 """
 
 PRODUCTS_TO_TEST = [
-    "Fentanyl Citrate 800mg Oral Transmucosal",
+
+"Lithium ion battery 18650 cylindrical",
+"Lithium ion battery 21700 cylindrical",
+"Lithium ion battery 4680 cylindrical",
+"Lithium polymer batter pouch cell",
+"Tank Ammunition 120mm",
+"Tank Ammunition 125mm",
 ]
 
-DEPTH    = 3       # supply chain depth per product (1–3)
+DEPTH    = 2      # supply chain depth per product (1–3)
 PROVIDER = "gemini" # which provider to use: anthropic | openai | gemini | deepseek
 
 
@@ -479,6 +488,7 @@ CRITICAL COMPANY NAME RULES:
 - Be consistent: if a company is known by an acronym (TSMC, BASF, ABB), use the acronym
 - If the name of the company is followed by (), check the contents within the bracket, and if it is another name for the said company, drop the brackets and its contents
 
+
 {existing_note}
 
 
@@ -546,7 +556,21 @@ List 2-8 significant OEMs as SEPARATE array elements."""
             oem_context.append(name)
         c = get_coords(oem.get("country",""))
         if c: oem["lat"], oem["lng"] = c
+    '''
+    product_name = product_info.get("product_name", "")
+    for oem in oem_list:
+        should_verify = (
+            oem.get("confidence") == "low" or len(oem.get("_providers", [])) <= 1
+        )
 
+        if should_verify:
+            push("status", message=f"🔍 Verifying {oem.get('company_name')}…")
+            verification = verify_manufacturer(oem.get("company_name",""), product_name, provider)
+            oem["_verification"] = verification
+            if not verification.get("verified"):
+                oem["confidence"] = "low"
+                oem["flagged"] = True
+    '''
     # Ensure primary OEM is always in the list
     primary_oem = product_info.get("oem_manufacturer","")
     if primary_oem and primary_oem.lower() not in ("unknown",""):
@@ -630,10 +654,10 @@ Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components 
 
 {evidence_note}
 ELIGIBILITY CRITERIA — a company must meet ALL of the following to be included:
-- Currently active and operating as of 2024
-- Has been actively manufacturing or producing {product_info.get('product_name')} within the last 5 years ({datetime.datetime.now().year-5} - {datetime.datetime.now().year})
-- Has demonstrable, documented manufacturing activity — not just distribution, reselling, or licensing
-- Exclude any company that has ceased production, been acquired and shut down, or exited the market before {datetime.datetime.now().year-5}
+- Currently active and operating as of {datetime.datetime.now().year}
+- Directly supplies components, materials, or parts to {parent} within the last 5 years ({datetime.datetime.now().year-5}–{datetime.datetime.now().year})
+- Has demonstrable, documented supply or manufacturing activity — not just distribution, reselling, or licensing
+- Exclude any company that has ceased operations, been acquired and shut down, or exited the market before {datetime.datetime.now().year-5}
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")
@@ -642,6 +666,7 @@ CRITICAL COMPANY NAME RULES:
 - Be consistent: if a company is known by an acronym (TSMC, BASF, ABB), use the acronym
 - If the name of the company is followed by (), check the contents within the bracket, and if it is another name for the said company, drop the brackets and its contents
 {tier_note(tier_num)}
+
 
 Return ONLY a valid JSON array (no markdown). Each element:
 {{
@@ -678,7 +703,7 @@ List 3-5 distinct real direct suppliers to {parent} specifically. Do NOT mix in 
         seen, unique = set(), []
         for s in tier_suppliers:
             #key = f"{s.get('company_name','').strip().lower()}|{s.get('oem_root','')}"
-            key = s.get('company_name', '').strip().lower()
+            key = f"{s.get('company_name','').strip().lower()}|{s.get('oem_root','')}"
             if key and key not in seen:
                 seen.add(key)
                 c = get_coords(s.get("country",""))
@@ -689,7 +714,21 @@ List 3-5 distinct real direct suppliers to {parent} specifically. Do NOT mix in 
             collected_tiers.setdefault(f"tier_{tier_num}", [])
             if name and name not in collected_tiers[f"tier_{tier_num}"]:
                 collected_tiers[f"tier_{tier_num}"].append(name)
-
+        '''
+        product_name = product_info.get("product_name", "")
+        for s in unique:
+            should_verify = (
+                s.get("confidence") == "low" or
+                len(s.get("_providers", [])) <= 1
+            )
+            if should_verify:
+                push("status", message=f"  🔍 Verifying {s.get('company_name')}…")
+                verification = verify_manufacturer(s.get("company_name",""), product_name, provider)
+                s["_verification"] = verification
+                if not verification.get("verified"):
+                    s["confidence"] = "low"
+                    s["flagged"] = True
+        '''
         supply_chain["tiers"][f"tier_{tier_num}"] = unique
         push("tier_complete", tier=tier_num, suppliers=unique)
         push("status", message=f"✅ Tier-{tier_num}: {len(unique)} suppliers found")
@@ -722,7 +761,97 @@ Return plain text only, no markdown."""
     push("complete", supply_chain=supply_chain)
 
 # ── Validation Export Helpers ─────────────────────────────────────────────────
+def verify_manufacturer(company_name, product_name, provider):
+    
+    # ── Layer 1: DDG ──────────────────────────────────────────────
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddg:
+            results = list(ddg.text(
+                f"{company_name} {product_name} manufacturer supplier",
+                max_results=5
+            ))
+    except:
+        return {"verified": False, "confidence": "low",
+                "reason": "DDG unavailable", "source_urls": [], "layer": 1}
 
+    if not results:
+        return {"verified": False, "confidence": "low",
+                "reason": "No web presence found", "source_urls": [], "layer": 1}
+
+    urls = [r.get("href", "") for r in results if r.get("href")]
+    snippets = [r.get("body", "") + " " + r.get("title", "") for r in results]
+    combined = " ".join(snippets).lower()
+
+    # ── Layer 2: keyword pre-filter ───────────────────────────────
+    MANUFACTURE_KEYWORDS = [
+        "manufactures", "manufacturer", "produces", "production",
+        "supplier", "supplies", "fabricates", "assembles", "factory",
+        "plant", "facility"
+    ]
+    EXCLUDE_KEYWORDS = [
+        "distributor", "reseller", "retailer", "discontinued",
+        "shut down", "acquired and closed", "bankrupt", "no longer produces"
+    ]
+
+    company_hit  = company_name.lower() in combined
+    product_hit  = product_name.lower() in combined
+    mfg_hit      = any(k in combined for k in MANUFACTURE_KEYWORDS)
+    exclude_hit  = any(k in combined for k in EXCLUDE_KEYWORDS)
+
+    # hard fail — not worth sending to LLM
+    if not company_hit or exclude_hit:
+        return {
+            "verified": False,
+            "confidence": "low",
+            "reason": "excluded by keyword filter" if exclude_hit else "company not found in search results",
+            "source_urls": urls,
+            "layer": 2
+        }
+
+    # clear pass — both company + product + mfg keyword found, skip LLM
+    if company_hit and product_hit and mfg_hit:
+        return {
+            "verified": True,
+            "confidence": "high",
+            "reason": "company, product and manufacturing activity all confirmed in search results",
+            "source_urls": urls,
+            "layer": 2
+        }
+
+    # ambiguous — send to LLM for grounded confirmation
+    # ── Layer 3: LLM reads real snippets ─────────────────────────
+    evidence = "\n---\n".join(snippets[:3])
+    prompt = f"""Based ONLY on the following web search snippets, determine if "{company_name}" manufactures or supplies "{product_name}".
+Do not use your training knowledge — only use what the snippets say.
+
+Snippets:
+{evidence}
+
+Reply ONLY with a JSON object:
+{{
+  "verified": true/false,
+  "confidence": "high|medium|low",
+  "reason": "one sentence citing specific snippet evidence",
+  "manufactures_product": true/false
+}}"""
+
+    try:
+        raw = call_ai(prompt, provider, max_tokens=150)
+        result = safe_parse_json(raw)
+        result["source_urls"] = urls
+        result["layer"] = 3
+        return result
+    except:
+        # LLM failed — fall back to keyword score
+        score = sum([company_hit, product_hit, mfg_hit])
+        return {
+            "verified": score >= 2,
+            "confidence": "medium" if score >= 2 else "low",
+            "reason": "LLM verification failed — keyword fallback used",
+            "source_urls": urls,
+            "layer": 2
+        }
 # ── HELPERS ────────────────────────────────────────────────────────────────────
 
 def set_col_widths(ws, widths: list[int]):
@@ -816,8 +945,8 @@ def write_oem_sheet(ws, results: list[dict]):
     One consolidated OEM sheet across all products.
     Columns: Product | Company | Country | Role | Market Share | Confidence | Notes
     """
-    headers = ["Product", "Company Name", "Country", "Role", "Market Share", "Confidence", "Notes", "AI Provider"]
-    col_widths = [28, 26, 14, 22, 12, 11, 35]
+    headers = ["Product", "Company Name", "Country", "Role", "Market Share", "Confidence", "Notes", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URLs", "Verification Layer", "Flagged"]
+    col_widths = [28, 26, 14, 22, 12, 11, 35, 14, 10, 14, 40, 50, 8, 10]
     set_col_widths(ws, col_widths)
 
     for ci, h in enumerate(headers, 1):
@@ -838,6 +967,13 @@ def write_oem_sheet(ws, results: list[dict]):
                 data_cell(ws, row, 6, oem.get("confidence", ""), fill=fill)
                 data_cell(ws, row, 7, oem.get("notes", ""), fill=fill)
                 data_cell(ws, row, 8, prov_id, fill=fill)
+                v = oem.get("_verification", {})
+                data_cell(ws, row, 9,  str(v.get("verified", "—")), fill=fill)
+                data_cell(ws, row, 10, v.get("confidence", "—"), fill=fill)
+                data_cell(ws, row, 11, v.get("reason", "—"), fill=fill)
+                data_cell(ws, row, 12, ", ".join(v.get("source_urls", [])), fill=fill)
+                data_cell(ws, row, 13, str(v.get("layer", "—")), fill=fill)
+                data_cell(ws, row, 14, str(oem.get("flagged", False)), fill=fill)
                 row += 1
     
     ws.freeze_panes = "A2"
@@ -848,8 +984,8 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
     One sheet per tier, all products combined.
     Columns: Product | Company | Country | Supplies To | OEM Root | Components | Confidence | Source
     """
-    headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider"]
-    col_widths = [28, 26, 14, 22, 20, 32, 11, 35]
+    headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URLs", "Verification Layer", "Flagged"]
+    col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 14, 40, 50, 8, 10]
     set_col_widths(ws, col_widths)
 
     hdr_fill = HDR_TIER[tier_num-1] if tier_num - 1 < len(HDR_TIER) else _fill("37474F")
@@ -874,6 +1010,13 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
                 data_cell(ws, row, 7, s.get("confidence", ""), fill=fill)
                 data_cell(ws, row, 8, s.get("source_hint", ""), fill=fill)
                 data_cell(ws, row, 9, prov_id, fill=fill)
+                v = s.get("_verification", {})
+                data_cell(ws, row, 10, str(v.get("verified", "—")), fill=fill)
+                data_cell(ws, row, 11, v.get("confidence", "—"), fill=fill)
+                data_cell(ws, row, 12, v.get("reason", "—"), fill=fill)
+                data_cell(ws, row, 13, ", ".join(v.get("source_urls", [])), fill=fill)
+                data_cell(ws, row, 14, str(v.get("layer", "—")), fill=fill)
+                data_cell(ws, row, 15, str(s.get("flagged", False)), fill=fill)
                 row += 1
     
     ws.freeze_panes = "A2"

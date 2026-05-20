@@ -460,12 +460,13 @@ function addNode(lat, lng, label, color, tier, popupHtml, jitter=true) {
 }
 
 const edgeReg = [];
+// const edgeRegDown = [];
 let focusedNode = null;
 
 function drawLine(fromLat, fromLng, toLat, toLng, color, fromKey, toKey) {
   if (!lmap) return;
   const line = L.polyline([[fromLat, fromLng], [toLat, toLng]], {
-    color, weight:1.5, opacity:55, dashArray:'5 7'
+    color, weight:1.5, opacity:0.55, dashArray:'5 7'
   }).addTo(lmap);
   edgeReg.push({line, fromKey, toKey});
 }
@@ -475,23 +476,25 @@ function focusNode(key) {
   
   focusedNode = key;
   const connected = new Set([key]);
+  const connectedDown = new Set([key]);
   let changed = true;
   while (changed) {
     changed = false;
     edgeReg.forEach (e => {
       if (connected.has(e.fromKey) && !connected.has(e.toKey)) {connected.add(e.toKey); changed=true; }
-      if (connected.has(e.toKey) && !connected.has(e.fromKey)) {connected.add(e.fromKey); changed=true;}
+      if (connectedDown.has(e.toKey) && !connectedDown.has(e.fromKey)) {connectedDown.add(e.fromKey); changed=true;}
     });
+
   }
 
   edgeReg.forEach(e => {
-    const active = connected.has(e.fromKey) && connected.has(e.toKey);
-    e.line.setStyle({ opacity: active ? 0.85 : 0.05, weight: active ? 2.5 : 1});
+    const active = (connected.has(e.fromKey) && connected.has(e.toKey)) || (connectedDown.has(e.fromKey) && connectedDown.has(e.toKey));
+    e.line.setStyle({ opacity: active ? 0.85 : 0.05, weight: active ? 2.5 : 0.5});
   });
 
   Object.entries(nodeReg).forEach(([k, n]) => {
     if (!n?.marker) return;
-    n.marker.setStyle({ fillOpactiy: connected.has(k) ? 0.95 : 0.1, opacity: connected.has(k) ? 1 : 0.15 });
+    n.marker.setStyle({ fillOpacity: connected.has(k) || connectedDown.has(k) ? 0.95 : 0.05, opacity: connected.has(k) || connectedDown.has(k) ? 1 : 0.05 });
   });
 }
 
@@ -637,9 +640,11 @@ function renderTierMap(tierNum, suppliers) {
       <div class="pu-tier" style="color:${color};border-color:${color}">Tier ${tierNum}</div>
       <div class="pu-comps">${(s.components_supplied||[]).join(', ')}</div>
       <div style="margin-top:5px;font-size:.63rem;color:var(--muted)">▶ Supplies to: ${s.supplies_to||'—'}</div>`;
-    const node = addNode(s.lat, s.lng, s.company_name, color, tierNum, popup);
+    const existingNode = nodeReg[s.company_name.toLowerCase()];
+    const node = existingNode || addNode(s.lat, s.lng, s.company_name, color, tierNum, popup);
     if (node) {
-      nodeReg[s.company_name.toLowerCase()] = node;
+      if (!existingNode) nodeReg[s.company_name.toLowerCase()] = node;
+      //nodeReg[s.company_name.toLowerCase()] = node;
       tierNodes[tierNum].push(node);
       // Heatmap
       const hKey = 'tier_'+tierNum;
@@ -647,7 +652,7 @@ function renderTierMap(tierNum, suppliers) {
       addHeatPoint(hKey, node.lat, node.lng, hInt);
 
       let parentNode = findParentNode(s.supplies_to);
-      if (!parentNode && tierNum===1 && oemMarker) parentNode = oemMarker;
+      if (!parentNode && tierNum===1) parentNode = nodeReg[s.oem_root?.toLowerCase()] || oemMarker;
       if (!parentNode && tierNum>1 && tierNodes[tierNum-1]?.length>0) {
         let best=null, bestDist=Infinity;
         for (const pn of tierNodes[tierNum-1]) {
@@ -658,7 +663,7 @@ function renderTierMap(tierNum, suppliers) {
       }
       if (parentNode) {
         const parentKey = Object.keys(nodeReg).find(k => nodeReg[k] === parentNode) || '';
-        drawLine(parentNode.lat, parentNode.lng, node.lat, node.lng, color, parentKey, s.company_name.toLowerCase());
+        drawLine(parentNode.lat, parentNode.lng, node.lat, node.lng, color, s.company_name.toLowerCase(), parentKey);
 
       }
     }

@@ -82,17 +82,21 @@ COUNTRY_COORDS = {
 "Drone (mini class, weight <=5, size <=450mm) Camera with Gimbal",
 "Drone (mini class, weight <=5, size <=450mm) Ground Controlling Unit",
 "Drone (mini class, weight <=5, size <=450mm) GPS",
-
-"""
-
-PRODUCTS_TO_TEST = [
-
+DONE
 "Lithium ion battery 18650 cylindrical",
+"Lithium ion battery 21700 cylindrical",
+YET TO BE DONE
 "Lithium ion battery 21700 cylindrical",
 "Lithium ion battery 4680 cylindrical",
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
+
+"""
+
+PRODUCTS_TO_TEST = [
+
+"Lithium ion battery 4680 cylindrical",
 ]
 
 DEPTH    = 2      # supply chain depth per product (1–3)

@@ -589,9 +589,10 @@ function renderOEMs(oems) {
         <div class="pu-country">📍 ${oem.country||'—'}</div>
         <div class="pu-tier" style="color:#d50c0c;border-color:#d50c0c">OEM</div>
         <div class="pu-comps">${oem.role||''} ${oem.notes ? '· '+oem.notes : ''}</div>`;
-      const node = addNode(oem.lat, oem.lng, oem.company_name, '#d50c0c', 0, popup, i > 0);
+      const existingNode = nodeReg[oem.company_name.toLowerCase()];
+      const node = existingNode || addNode(oem.lat, oem.lng, oem.company_name, '#d50c0c', 0, popup, i > 0);
       if (node) {
-        nodeReg[oem.company_name.toLowerCase()] = node;
+        if (!existingNode) nodeReg[oem.company_name.toLowerCase()] = node;
         if (i === 0) oemMarker = node;
         const intensity = oem.market_share==='high' ? 1.0 : oem.market_share==='medium' ? 0.6 : 0.3;
         addHeatPoint('oem', node.lat, node.lng, intensity);

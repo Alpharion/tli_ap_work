@@ -8,7 +8,7 @@ Search backends:
 
 import json, re, time, threading, os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from flask import Flask, request, jsonify, Response, render_template
 from flask_cors import CORS

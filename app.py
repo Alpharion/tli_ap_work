@@ -97,6 +97,11 @@ YET TO BE DONE
 PRODUCTS_TO_TEST = [
 
 "Lithium ion battery 4680 cylindrical",
+"Lithium ion battery 21700 cylindrical",
+"Lithium ion battery 4680 cylindrical",
+"Lithium polymer batter pouch cell",
+"Tank Ammunition 120mm",
+"Tank Ammunition 125mm",
 ]
 
 DEPTH    = 2      # supply chain depth per product (1–3)
@@ -274,7 +279,7 @@ def gemini_search_and_answer(query: str, api_key: str) -> str:
         from google.genai import types
         client = genai.Client(api_key=api_key)
         resp = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=f"Search the web and provide detailed factual information about: {query}\nInclude company names, countries, and supply chain relationships.",
             config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -292,7 +297,7 @@ def gemini_search_and_answer(query: str, api_key: str) -> str:
             from google import genai
             client = genai.Client(api_key=api_key)
             resp = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=f"Based on your knowledge, provide information about: {query}\nInclude company names, countries, and supply chain relationships."
             )
             return resp.text
@@ -317,7 +322,7 @@ def call_ai(prompt: str, provider: str, max_tokens: int = 1000) -> str:
         key = os.getenv("OPENAI_API_KEY")
         if not key: raise ValueError("OPENAI_API_KEY not set in .env")
         c = OpenAI(api_key=key)
-        r = c.chat.completions.create(model="gpt-4o-mini", max_tokens=max_tokens,
+        r = c.chat.completions.create(model="gpt-4.1-mini", max_tokens=max_tokens,
                                        messages=[{"role":"user","content":prompt}])
         return r.choices[0].message.content
 
@@ -326,7 +331,7 @@ def call_ai(prompt: str, provider: str, max_tokens: int = 1000) -> str:
         key = os.getenv("GEMINI_API_KEY")
         if not key: raise ValueError("GEMINI_API_KEY not set in .env")
         client = genai.Client(api_key=key)
-        r = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        r = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         return r.text
 
     elif provider == "deepseek":
@@ -377,10 +382,10 @@ def available_providers() -> list[dict]:
         {"id":"anthropic","name":"Anthropic Claude","model":"claude-sonnet-4-6",
          "env":"ANTHROPIC_API_KEY","configured":bool(os.getenv("ANTHROPIC_API_KEY")),
          "search":"DuckDuckGo"},
-        {"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4o-mini",
+        {"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4.1-mini",
          "env":"OPENAI_API_KEY","configured":bool(os.getenv("OPENAI_API_KEY")),
          "search":"DuckDuckGo"},
-        {"id":"gemini","name":"Google Gemini","model":"gemini-2.0-flash",
+        {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
          "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),
          "search":"Google Search (built-in)"},
         {"id":"deepseek","name":"DeepSeek V3","model":"deepseek-chat",

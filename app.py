@@ -92,16 +92,17 @@ YET TO BE DONE
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
 
-"""
-
-PRODUCTS_TO_TEST = [
-
 "Lithium ion battery 4680 cylindrical",
 "Lithium ion battery 21700 cylindrical",
 "Lithium ion battery 4680 cylindrical",
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
+
+"""
+
+PRODUCTS_TO_TEST = [
+    "Tank Ammunition 120mm",
 ]
 
 DEPTH    = 2      # supply chain depth per product (1–3)
@@ -659,14 +660,35 @@ List 2-8 significant OEMs as SEPARATE array elements."""
             tier_prompt = f"""You are a supply chain research assistant.
 Product: {product_info.get('product_name')} ({product_info.get('industry')})
 OEM root: {oem_root}
-Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components to: {parent}
+Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components involved in the manufacturing of {product_info.get('product_name')} to: {parent}
 
 {evidence_note}
-ELIGIBILITY CRITERIA — a company must meet ALL of the following to be included:
+STRICT INCLUSION RULES — a supplier must meet ALL of the following:
+- Supplies {parent} with something physically used in making "{product_info.get('product_name')}" 
+  or one of its listed key components
+- If {parent} makes multiple product lines, only include suppliers relevant to the 
+  "{product_info.get('product_name')}" product line specifically
 - Currently active and operating as of {datetime.datetime.now().year}
-- Directly supplies components, materials, or parts to {parent} within the last 5 years ({datetime.datetime.now().year-5}–{datetime.datetime.now().year})
-- Has demonstrable, documented supply or manufacturing activity — not just distribution, reselling, or licensing
-- Exclude any company that has ceased operations, been acquired and shut down, or exited the market before {datetime.datetime.now().year-5}
+- Direct supply relationship within the last 5 years — not distribution, reselling, or licensing
+
+STRICT EXCLUSION RULES — do NOT include:
+- Suppliers that provide {parent} with general industrial inputs unrelated to
+  "{product_info.get('product_name')}" (e.g. office supplies, IT services, generic packaging)
+- Suppliers for {parent}'s other unrelated product lines
+- Logistics, shipping, or freight companies
+- Financial, legal, or consulting service providers
+- Any company that does not contribute a physical material, chemical, or manufactured
+  component that ends up in "{product_info.get('product_name')}"
+- Recycling companies, waste processors, or end-of-life battery collectors
+- Any company whose primary relationship with {parent} is as a customer, not a supplier
+- Any company that manufactures the same end product as {parent} — i.e. another producer
+  of "{product_info.get('product_name')}". Even if two manufacturers have cross-supply
+  agreements, do not include them — they are market competitors, not supply chain inputs
+- Any company that appears in the OEM manufacturer list for "{product_info.get('product_name')}" —
+  OEM manufacturers of the same product are never valid Tier-{{tier_num}} material suppliers
+  to each other
+- Internal subsidiaries or parent companies of {parent} — only include independent
+  third-party suppliers
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")

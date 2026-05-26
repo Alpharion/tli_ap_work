@@ -94,7 +94,6 @@ YET TO BE DONE
 
 "Lithium ion battery 4680 cylindrical",
 "Lithium ion battery 21700 cylindrical",
-"Lithium ion battery 4680 cylindrical",
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",

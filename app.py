@@ -102,10 +102,7 @@ YET TO BE DONE
 """
 
 PRODUCTS_TO_TEST = [
-"Lithium ion battery 4680 cylindrical",
-"Lithium ion battery 21700 cylindrical",
-"Lithium ion battery 4680 cylindrical",
-"Lithium polymer batter pouch cell",
+
 "Tank Ammunition 125mm",
 ]
 

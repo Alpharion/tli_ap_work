@@ -103,6 +103,17 @@ YET TO BE DONE
 PRODUCTS_TO_TEST = [
 
 "Tank Ammunition 125mm",
+
+"""
+
+PRODUCTS_TO_TEST = [
+
+"Tank Ammunition 125mm",
+
+"""
+
+PRODUCTS_TO_TEST = [
+    "Tank Ammunition 120mm",
 ]
 
 DEPTH    = 2      # supply chain depth per product (1–3)

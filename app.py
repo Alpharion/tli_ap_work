@@ -377,14 +377,16 @@ def build_prompt_with_evidence(base_prompt: str, evidence: str) -> str:
 
 
 # ── Provider status ───────────────────────────────────────────────────────────
+"""
+{"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4.1-mini",
+    "env":"OPENAI_API_KEY","configured":bool(os.getenv("OPENAI_API_KEY")),
+    "search":"DuckDuckGo"},
+"""
 
 def available_providers() -> list[dict]:
     return [
         {"id":"anthropic","name":"Anthropic Claude","model":"claude-sonnet-4-6",
          "env":"ANTHROPIC_API_KEY","configured":bool(os.getenv("ANTHROPIC_API_KEY")),
-         "search":"DuckDuckGo"},
-        {"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4.1-mini",
-         "env":"OPENAI_API_KEY","configured":bool(os.getenv("OPENAI_API_KEY")),
          "search":"DuckDuckGo"},
         {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
          "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),

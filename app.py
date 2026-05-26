@@ -672,13 +672,23 @@ STRICT INCLUSION RULES — a supplier must meet ALL of the following:
 - Direct supply relationship within the last 5 years — not distribution, reselling, or licensing
 
 STRICT EXCLUSION RULES — do NOT include:
-- Suppliers that provide {parent} with general industrial inputs unrelated to 
+- Suppliers that provide {parent} with general industrial inputs unrelated to
   "{product_info.get('product_name')}" (e.g. office supplies, IT services, generic packaging)
 - Suppliers for {parent}'s other unrelated product lines
 - Logistics, shipping, or freight companies
 - Financial, legal, or consulting service providers
-- Any company that does not contribute a physical material, chemical, or manufactured 
+- Any company that does not contribute a physical material, chemical, or manufactured
   component that ends up in "{product_info.get('product_name')}"
+- Recycling companies, waste processors, or end-of-life battery collectors
+- Any company whose primary relationship with {parent} is as a customer, not a supplier
+- Any company that manufactures the same end product as {parent} — i.e. another producer
+  of "{product_info.get('product_name')}". Even if two manufacturers have cross-supply
+  agreements, do not include them — they are market competitors, not supply chain inputs
+- Any company that appears in the OEM manufacturer list for "{product_info.get('product_name')}" —
+  OEM manufacturers of the same product are never valid Tier-{{tier_num}} material suppliers
+  to each other
+- Internal subsidiaries or parent companies of {parent} — only include independent
+  third-party suppliers
 
 CRITICAL COMPANY NAME RULES:
 - Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")

@@ -99,10 +99,22 @@ YET TO BE DONE
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
+
+NEED TO DO POLYMER PRINTER AGN
 """
 
 PRODUCTS_TO_TEST = [
-"Lithium ion battery 18650 cylindrical"
+"Filament type raw material for printers (PLA, ABS PETG, PP etc) for printing drone (mini class, weight <=5, size <=450mm)",
+"Powder type raw materials for printers (stainless steel 216L, thermoplastic powders) for printing drone (mini class, weight <=5, size <=450mm)",
+"High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",
+"Propeller for drones (mini class, weight <=5, size <=450mm)",
+"DC Brushless Motor for drone (mini class, weight <=5, size <=450mm)",
+"Radio Receiver and Transmitter for drone (mini class, weight <=5, size <=450mm)",
+"Camera with Gimbal for drone (mini class, weight <=5, size <=450mm)",
+"Ground Controlling Unit for drone (mini class, weight <=5, size <=450mm)",
+"Battery Management System for drone (mini class, weight <=5, size <=450mm)",
+"Connectors and Cables for drone (mini class, weight <=5, size <=450mm)",
+"Structural Adhesives for drone (mini class, weight <=5, size <=450mm)", # left this one
 ]
 
 DEPTH    = 2      # supply chain depth per product (1–3)
@@ -381,18 +393,18 @@ def build_prompt_with_evidence(base_prompt: str, evidence: str) -> str:
 {"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4.1-mini",
     "env":"OPENAI_API_KEY","configured":bool(os.getenv("OPENAI_API_KEY")),
     "search":"DuckDuckGo"},
+        {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
+         "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),
+         "search":"Google Search (built-in)"},
+        {"id":"deepseek","name":"DeepSeek V3","model":"deepseek-chat",
+         "env":"DEEPSEEK_API_KEY","configured":bool(os.getenv("DEEPSEEK_API_KEY")),
+         "search":"DuckDuckGo"},
 """
 
 def available_providers() -> list[dict]:
     return [
         {"id":"anthropic","name":"Anthropic Claude","model":"claude-sonnet-4-6",
          "env":"ANTHROPIC_API_KEY","configured":bool(os.getenv("ANTHROPIC_API_KEY")),
-         "search":"DuckDuckGo"},
-        {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
-         "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),
-         "search":"Google Search (built-in)"},
-        {"id":"deepseek","name":"DeepSeek V3","model":"deepseek-chat",
-         "env":"DEEPSEEK_API_KEY","configured":bool(os.getenv("DEEPSEEK_API_KEY")),
          "search":"DuckDuckGo"},
     ]
 

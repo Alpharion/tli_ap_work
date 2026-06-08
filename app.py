@@ -99,11 +99,6 @@ YET TO BE DONE
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
-
-NEED TO DO POLYMER PRINTER AGN
-"""
-
-PRODUCTS_TO_TEST = [
 "Filament type raw material for printers (PLA, ABS PETG, PP etc) for printing drone (mini class, weight <=5, size <=450mm)",
 "Powder type raw materials for printers (stainless steel 216L, thermoplastic powders) for printing drone (mini class, weight <=5, size <=450mm)",
 "High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",
@@ -114,6 +109,12 @@ PRODUCTS_TO_TEST = [
 "Ground Controlling Unit for drone (mini class, weight <=5, size <=450mm)",
 "Battery Management System for drone (mini class, weight <=5, size <=450mm)",
 "Connectors and Cables for drone (mini class, weight <=5, size <=450mm)",
+
+NEED TO DO POLYMER PRINTER AGN
+"""
+
+PRODUCTS_TO_TEST = [
+"High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",
 "Structural Adhesives for drone (mini class, weight <=5, size <=450mm)", # left this one
 ]
 

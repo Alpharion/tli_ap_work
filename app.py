@@ -2215,9 +2215,10 @@ List 2-5 significant China-based OEMs. If none exist for this product, return an
         push("status", message=f"🏭 Researching Tier-{tier_num} suppliers…")
         tier_suppliers = []
 
-        # Cap: each parent feeds at most 4 of its suppliers into the next tier.
-        # At tier 1 no cap needed (OEMs are the seed, not prior suppliers).
-        capped_parents = current_parents if tier_num == 1 else current_parents[:4 * len(current_parents)]
+        # Cap: at tier 2+, current_parents is the full tier-1 supplier list which can be large.
+        # Limit to 12 parents max to prevent runaway LLM costs (roughly 4 OEMs × 3 suppliers each).
+        # Tier 1 uses all OEMs uncapped since there are typically only 3-8.
+        capped_parents = current_parents if tier_num == 1 else current_parents[:12]
 
         for parent in capped_parents:
             if not parent or parent.lower() == "unknown":

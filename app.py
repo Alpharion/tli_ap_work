@@ -407,6 +407,12 @@ def available_providers() -> list[dict]:
         {"id":"anthropic","name":"Anthropic Claude","model":"claude-sonnet-4-6",
          "env":"ANTHROPIC_API_KEY","configured":bool(os.getenv("ANTHROPIC_API_KEY")),
          "search":"DuckDuckGo"},
+         {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
+         "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),
+         "search":"Google Search (built-in)"},
+        {"id":"deepseek","name":"DeepSeek V3","model":"deepseek-chat",
+         "env":"DEEPSEEK_API_KEY","configured":bool(os.getenv("DEEPSEEK_API_KEY")),
+         "search":"DuckDuckGo"},
     ]
 
 

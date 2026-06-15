@@ -24,3 +24,6 @@ duckduckgo_search
 
 # ── Excel Export ────────────────────────────────────────────
 openpyxl
+
+# ── Headless browser (verify.py) ─────────────────────────────
+playwright

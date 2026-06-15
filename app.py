@@ -29,6 +29,9 @@ import tempfile
 app = Flask(__name__)
 CORS(app)
 
+from verify import verify_bp
+app.register_blueprint(verify_bp)
+
 # ── Country coords ────────────────────────────────────────────────────────────
 COUNTRY_COORDS = {
     "united states":(37.09,-95.71),"usa":(37.09,-95.71),"us":(37.09,-95.71),
@@ -191,9 +194,11 @@ def extract_balanced(text: str, open_char: str, close_char: str) -> str | None:
     return best
 
 
-def safe_parse_json(text: str) -> list | dict | None:
+def safe_parse_json(text) -> list | dict | None:
     """Try multiple strategies to parse potentially malformed JSON from AI."""
-    cleaned = clean_json(text)
+    if not text:
+        return None
+    cleaned = clean_json(str(text))
 
     # Strategy 1: direct parse of cleaned text
     try:
@@ -1036,7 +1041,7 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
     One sheet per tier, all products combined.
     Columns: Product | Company | Country | Supplies To | OEM Root | Components | Confidence | Source
     """
-    headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URLs", "Verification Layer", "Flagged"]
+    headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URL", "Verification Layer", "Flagged"]
     col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 14, 40, 50, 8, 10]
     set_col_widths(ws, col_widths)
 
@@ -1066,7 +1071,7 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
                 data_cell(ws, row, 10, str(v.get("verified", "—")), fill=fill)
                 data_cell(ws, row, 11, v.get("confidence", "—"), fill=fill)
                 data_cell(ws, row, 12, v.get("reason", "—"), fill=fill)
-                data_cell(ws, row, 13, ", ".join(v.get("source_urls", [])), fill=fill)
+                data_cell(ws, row, 13, s.get("source_url", ""), fill=fill)
                 data_cell(ws, row, 14, str(v.get("layer", "—")), fill=fill)
                 data_cell(ws, row, 15, str(s.get("flagged", False)), fill=fill)
                 row += 1
@@ -1114,8 +1119,8 @@ def write_product_sheet(ws, result: dict):
 
     current_row = len(overview_fields) + 5
 
-    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint"]
-    tier_widths  = [28, 14, 22, 20, 32, 11, 35]
+    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint", "Source URL"]
+    tier_widths  = [28, 14, 22, 20, 32, 11, 35, 50]
 
     # ── One section per provider ──────────────────────────────────────────────
     for prov_id, sc in provider_results.items():
@@ -1124,7 +1129,7 @@ def write_product_sheet(ws, result: dict):
         prov_heading = ws.cell(row=current_row, column=1, value=f"Provider: {prov_id.upper()}")
         prov_heading.font = Font(name=FONT, bold=True, size=12, color="FFFFFF")
         prov_heading.fill = _fill("37474F")
-        ws.merge_cells(f"A{current_row}:G{current_row}")
+        ws.merge_cells(f"A{current_row}:H{current_row}")
         ws.row_dimensions[current_row].height = 22
         current_row += 1
 
@@ -1132,7 +1137,7 @@ def write_product_sheet(ws, result: dict):
         summary_cell = ws.cell(row=current_row, column=1, value=sc.get("summary", "No summary generated."))
         summary_cell.font = _font()
         summary_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-        ws.merge_cells(f"A{current_row}:G{current_row}")
+        ws.merge_cells(f"A{current_row}:H{current_row}")
         ws.row_dimensions[current_row].height = 50
         current_row += 2
 
@@ -1151,7 +1156,7 @@ def write_product_sheet(ws, result: dict):
                                value=f"{tier_label} ({len(suppliers)} suppliers)")
             heading.font = Font(name=FONT, bold=True, size=11, color="FFFFFF")
             heading.fill = hdr_fill
-            ws.merge_cells(f"A{current_row}:G{current_row}")
+            ws.merge_cells(f"A{current_row}:H{current_row}")
             ws.row_dimensions[current_row].height = 22
             current_row += 1
 
@@ -1175,6 +1180,7 @@ def write_product_sheet(ws, result: dict):
                 data_cell(ws, current_row, 5, ", ".join(s.get("components_supplied") or []), fill=fill)
                 data_cell(ws, current_row, 6, s.get("confidence", ""),    fill=fill)
                 data_cell(ws, current_row, 7, s.get("source_hint", ""),   fill=fill)
+                data_cell(ws, current_row, 8, s.get("source_url", ""),    fill=fill)
                 ws.row_dimensions[current_row].height = 60
                 current_row += 1
 
@@ -1528,7 +1534,8 @@ def agentic_export():
 
     accept = request.headers.get("Accept", "")
     if "text/html" in accept:
-        stream_url = f"/dev/agentic_export/stream?product={product}&depth={depth}"
+        from urllib.parse import quote
+        stream_url = f"/dev/agentic_export/stream?product={quote(product)}&depth={depth}"
         download_base = "/dev/agentic_export/download"
         return Response(f"""<!DOCTYPE html>
 <html>
@@ -1826,9 +1833,11 @@ Do NOT add or remove companies from the list."""
             )
         )
         text_parts = []
-        for part in resp.candidates[0].content.parts:
-            if hasattr(part, "text") and part.text:
-                text_parts.append(part.text)
+        candidates = getattr(resp, "candidates", [])
+        if candidates and getattr(candidates[0], "content", None):
+            for part in candidates[0].content.parts:
+                if hasattr(part, "text") and part.text:
+                    text_parts.append(part.text)
         raw = "\n".join(text_parts)
         enrichments = safe_parse_json(raw)
 
@@ -1902,7 +1911,8 @@ Example:
             model="gemini-2.5-flash",
             contents=prompt
         )
-        clusters = safe_parse_json(resp.text)
+        raw_text = getattr(resp, "text", None) or ""
+        clusters = safe_parse_json(raw_text)
 
         if not isinstance(clusters, list):
             return records
@@ -2184,19 +2194,17 @@ List 2-5 significant China-based OEMs. If none exist for this product, return an
     supply_chain = {"product": product_info, "oems": all_oems, "tiers": {}}
 
     # ── Step 3: Tier supplier discovery ──────────────────────────────────────
-    # Seed the loop with OEM names. Each iteration replaces current_parents with
-    # the survivors of that tier — no dict-of-dicts needed, just a flat list of names.
+    # Each entry in current_parents is a (parent_name, oem_root) tuple so that
+    # oem_root is correctly threaded through every tier for every chain, not just
+    # fixed to the first OEM. Each parent produces at most 4 children per tier.
     current_parents = [
-        o.get("company_name", "")
+        (o.get("company_name", ""), o.get("company_name", ""))
         for o in all_oems
         if o.get("company_name", "").lower() not in ("unknown", "")
     ]
     if not current_parents:
-        current_parents = [product_info.get("oem_manufacturer", product_input)]
-
-    # oem_root is fixed for the whole run — it's always the name of the first OEM
-    # that anchors this supply chain. Used for display grouping in the frontend.
-    oem_root = current_parents[0] if current_parents else product_input
+        fallback = product_info.get("oem_manufacturer", product_input)
+        current_parents = [(fallback, fallback)]
 
     # Shared supplier JSON schema shown to LLMs as a format template.
     # Field descriptions are instructions for the model, not Python placeholders.
@@ -2212,15 +2220,11 @@ List 2-5 significant China-based OEMs. If none exist for this product, return an
 }"""
 
     for tier_num in range(1, depth + 1):
-        push("status", message=f"🏭 Researching Tier-{tier_num} suppliers…")
+        push("status", message=f"🏭 Researching Tier-{tier_num} suppliers… ({len(current_parents)} parent(s))")
         tier_suppliers = []
+        next_parents = []  # (child_name, oem_root) pairs for the next tier
 
-        # Cap: at tier 2+, current_parents is the full tier-1 supplier list which can be large.
-        # Limit to 12 parents max to prevent runaway LLM costs (roughly 4 OEMs × 3 suppliers each).
-        # Tier 1 uses all OEMs uncapped since there are typically only 3-8.
-        capped_parents = current_parents if tier_num == 1 else current_parents[:12]
-
-        for parent in capped_parents:
+        for parent, oem_root in current_parents:
             if not parent or parent.lower() == "unknown":
                 continue
 
@@ -2311,6 +2315,13 @@ List 2-3 China-based suppliers to {parent}. If none exist, return []."""
                 parent_suppliers = gemini_enrich_suppliers(
                     parent, product_info.get("product_name", ""), parent_suppliers, gemini_key)
 
+            # Cap at 4 children per parent, then register them as next-tier parents
+            capped = parent_suppliers[:4]
+            for s in capped:
+                child_name = s.get("company_name", "").strip()
+                if child_name and child_name.lower() != "unknown":
+                    next_parents.append((child_name, oem_root))
+
             tier_suppliers.extend(parent_suppliers)
 
         # Gemini dedup across the whole tier (all parents combined)
@@ -2341,14 +2352,10 @@ List 2-3 China-based suppliers to {parent}. If none exist, return []."""
 
         supply_chain["tiers"][f"tier_{tier_num}"] = tier_suppliers
         push("tier_complete", tier=tier_num, suppliers=tier_suppliers)
-        push("status", message=f"✅ Tier-{tier_num}: {len(tier_suppliers)} supplier(s) found")
+        push("status", message=f"✅ Tier-{tier_num}: {len(tier_suppliers)} supplier(s) found across {len(current_parents)} parent(s)")
 
-        # Survivors of this tier become the parents for the next iteration
-        current_parents = [
-            s.get("company_name", "").strip()
-            for s in tier_suppliers
-            if s.get("company_name", "").strip().lower() not in ("", "unknown")
-        ]
+        # next_parents carries (child_name, oem_root) pairs into the next iteration
+        current_parents = next_parents
         if not current_parents:
             push("status", message=f"⚠️ No suppliers at Tier-{tier_num}, stopping.")
             break

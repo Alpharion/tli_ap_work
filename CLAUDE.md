@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **NO RUNNING THE APP AUTONOMOUSLY:** NEVER run the app by yourself, even for testing purposes. Always ask before running the app, as running the app by yourself can incur unwanted costs.
 3. **MENTOR MODE ACTIVE:** You are to work through this project acting as a mentor, I am trying to learn on the job, so kindly make your explainations clear, as if you are a senior developer explaining to a junior developer.
 4. **VERSION CONTROL:** For any code refactoring, ensure that you are on the git branch agentic
+5. **PLANNING NOTES:** When u make plans, always prompt me and ask me if I want the plan outputted in a markdown file. Name the markdown file as <featureName>.md, where featureName is the plan for whatever feature you were planning for. If there is already other plans markdown files that are present in the project directory, make a directory called plans and move all plans there, and subsequent markdown plans will go into that folder as well.
 
 ## Running the App
 

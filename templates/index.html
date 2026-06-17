@@ -181,6 +181,8 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .btn-dl.pdf:hover{box-shadow:0 4px 16px rgba(255,107,71,.3)}
 .btn-dl.word{background:transparent;color:#47c8ff;border-color:#47c8ff}
 .btn-dl.word:hover{box-shadow:0 4px 16px rgba(71,200,255,.3)}
+.btn-dl.excel{background:transparent;color:#4ade80;border-color:#4ade80}
+.btn-dl.excel:hover{box-shadow:0 4px 16px rgba(74,222,128,.3)}
 .dl-label{font-size:.65rem;color:var(--muted1)}
  
 
@@ -266,6 +268,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
     <span class="dl-label">Download results:</span>
     <button class="btn-dl pdf" id="btnPdf" onclick="downloadReport('pdf')" disabled>📄 Download PDF</button>
     <button class="btn-dl word" id="btnWord" onclick="downloadReport('docx')" disabled>📝 Download Word</button>
+    <button class="btn-dl excel" id="btnExcel" onclick="exportExcel()" disabled>📊 Export Excel</button>
   </div>
 
   <!-- MAP TAB -->
@@ -768,6 +771,7 @@ function reset() {
   document.getElementById('downloadBar').classList.remove('visible');
   document.getElementById('btnPdf').disabled=true;
   document.getElementById('btnWord').disabled=true;
+  document.getElementById('btnExcel').disabled=true;
   document.getElementById('oemSection').classList.remove('visible');
   document.getElementById('oemGrid').innerHTML='';
   lastSupplyChain = null;
@@ -797,6 +801,33 @@ async function downloadReport(format) {
     URL.revokeObjectURL(url);
   } catch(e) { alert('Export failed: '+e.message); }
   finally { btn.disabled=false; btn.innerHTML=origText; }
+}
+
+// ── excel export ──────────────────────────────────────────────────────────────
+async function exportExcel() {
+  if (!lastSupplyChain) return;
+  const btn = document.getElementById('btnExcel');
+  const origText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Generating…';
+  try {
+    const depth = Object.keys(lastSupplyChain.tiers || {}).length || 1;
+    const product = lastSupplyChain.product?.product_name || 'supply_chain';
+    const resp = await fetch(`${BACKEND}/api/export/excel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supply_chain: lastSupplyChain, product_input: product, depth })
+    });
+    if (!resp.ok) { const err = await resp.json(); alert('Export failed: ' + (err.error || 'Unknown error')); return; }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${product.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40)}_supply_chain.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { alert('Export failed: ' + e.message); }
+  finally { btn.disabled = false; btn.innerHTML = origText; }
 }
 
 // ── load providers ────────────────────────────────────────────────────────────
@@ -1149,6 +1180,7 @@ function startMapping() {
         document.getElementById('downloadBar').classList.add('visible');
         document.getElementById('btnPdf').disabled=false;
         document.getElementById('btnWord').disabled=false;
+        document.getElementById('btnExcel').disabled=false;
         document.getElementById('heatControls').style.display='block';
       }
       else if (d.type==='complete') {
@@ -1161,8 +1193,9 @@ function startMapping() {
         document.getElementById('downloadBar').classList.add('visible');
         document.getElementById('btnPdf').disabled=false;
         document.getElementById('btnWord').disabled=false;
+        document.getElementById('btnExcel').disabled=false;
         document.getElementById('heatControls').style.display='block';
-        
+
       }
       else if (d.type==='error') { appendLog(`❌ ${d.message}`,false); done(); }
       else if (d.type==='stream_end') {

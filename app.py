@@ -117,11 +117,18 @@ NEED TO DO POLYMER PRINTER AGN
 """
 
 PRODUCTS_TO_TEST = [
-"High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",
-"Structural Adhesives for drone (mini class, weight <=5, size <=450mm)", # left this one
+"Mini Drone body frame",
+"Mini Drone Electronic Speed Controller",
+"Mini Drone Flight Processing Controller",
+"Mini Drone Antenna",
+"Mini Drone GPS",
+"Mini Drone Mini Cells",
+"Mini Drone Thermal management materials",
+"Wire Arc AM Printer for Mini Drones",
+"High resolution 3D scanners for mini drones"
 ]
 
-DEPTH    = 2      # supply chain depth per product (1–3)
+DEPTH    = 2      # supply chain depth per product (1–3),
 PROVIDER = "gemini" # which provider to use: anthropic | openai | gemini | deepseek
 
 
@@ -1041,13 +1048,18 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
     One sheet per tier, all products combined.
     Columns: Product | Company | Country | Supplies To | OEM Root | Components | Confidence | Source
     """
-    headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URL", "Verification Layer", "Flagged"]
-    col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 14, 40, 50, 8, 10]
+    base_headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Flagged"]
+    verify_headers = ["Verification Notes", "Company Exists", "Supply Ties Exist", "Correct Component Supplied", "URL"]
+    headers = base_headers + verify_headers
+    col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 40, 14, 14, 14, 50]
     set_col_widths(ws, col_widths)
 
     hdr_fill = HDR_TIER[tier_num-1] if tier_num - 1 < len(HDR_TIER) else _fill("37474F")
-    for ci, h in enumerate(headers, 1):
+    verify_fill = _fill("E65100")
+    for ci, h in enumerate(base_headers, 1):
         hdr_cell(ws, 1, ci, h, hdr_fill)
+    for ci, h in enumerate(verify_headers, len(base_headers) + 1):
+        hdr_cell(ws, 1, ci, h, verify_fill)
     ws.row_dimensions[1].height = 24
 
     row = 2
@@ -1067,15 +1079,10 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
                 data_cell(ws, row, 7, s.get("confidence", ""), fill=fill)
                 data_cell(ws, row, 8, s.get("source_hint", ""), fill=fill)
                 data_cell(ws, row, 9, prov_id, fill=fill)
-                v = s.get("_verification", {})
-                data_cell(ws, row, 10, str(v.get("verified", "—")), fill=fill)
-                data_cell(ws, row, 11, v.get("confidence", "—"), fill=fill)
-                data_cell(ws, row, 12, v.get("reason", "—"), fill=fill)
-                data_cell(ws, row, 13, s.get("source_url", ""), fill=fill)
-                data_cell(ws, row, 14, str(v.get("layer", "—")), fill=fill)
-                data_cell(ws, row, 15, str(s.get("flagged", False)), fill=fill)
+                data_cell(ws, row, 10, str(s.get("flagged", False)), fill=fill)
+                # cols 11-15: verification columns left empty (to be filled by verify layer)
                 row += 1
-    
+
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row-1}"
 
@@ -2452,6 +2459,28 @@ def find_node():
                 if node_bin.exists():
                     return str(node_bin)
     return None
+
+
+@app.route("/api/export/excel", methods=["POST"])
+def export_excel():
+    try:
+        data = request.get_json(force=True)
+        supply_chain = data.get("supply_chain", {})
+        product_input = data.get("product_input", supply_chain.get("product", {}).get("product_name", "export"))
+        depth = int(data.get("depth", 3))
+
+        clean = re.sub(r'[\\/*?\[\]:]', '', product_input).strip()[:26]
+        sheet_prefix = f"1_{clean}"
+
+        results = [{"product_input": product_input, "supply_chain": supply_chain, "sheet_prefix": sheet_prefix}]
+
+        wb_bytes = build_bulk_workbook(results, supply_chain.get("provider", "Frontend Export"), depth)
+        buf = io.BytesIO(wb_bytes)
+        return send_file(buf, as_attachment=True,
+                         download_name=f"{clean}_supply_chain.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/export/docx", methods=["POST"])

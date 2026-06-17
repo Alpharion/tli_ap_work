@@ -122,7 +122,7 @@ PRODUCTS_TO_TEST = [
 "Mini Drone Flight Processing Controller",
 "Mini Drone Antenna",
 "Mini Drone GPS",
-"Mini Drone Mini Cells",
+"Mini Drone battery cells", #HERE
 "Mini Drone Thermal management materials",
 "Wire Arc AM Printer for Mini Drones",
 "High resolution 3D scanners for mini drones"

@@ -61,19 +61,34 @@ def playwright_search(query: str, n: int = 4, log_fn=None) -> list[dict]:
     driver = None
     try:
         options = EdgeOptions()
-        options.add_argument("--headless")
+        options.add_argument("--headless=new")          # new headless mode — less detectable
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--ignore-certificate-errors")   # corporate SSL interception
+        options.add_argument("--ignore-ssl-errors")
+        options.add_argument("--allow-insecure-localhost")
+        options.add_argument("--disable-blink-features=AutomationControlled")  # anti-detection
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
         options.add_argument(
             "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
         )
 
+        # Pass system proxy settings through to Edge if set
+        import urllib.request
+        proxy = urllib.request.getproxies().get("https") or urllib.request.getproxies().get("http")
+        if proxy:
+            _log(f"[selenium] Using system proxy: {proxy}")
+            options.add_argument(f"--proxy-server={proxy}")
+
         service = EdgeService(EdgeChromiumDriverManager().install())
         driver = webdriver.Edge(service=service, options=options)
-        driver.set_page_load_timeout(15)
+        # Remove the webdriver flag that sites use to detect automation
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        driver.set_page_load_timeout(20)
 
         # ── Step 1: fetch Bing search results page ────────────────────────
         driver.get(search_url)
@@ -98,7 +113,7 @@ def playwright_search(query: str, n: int = 4, log_fn=None) -> list[dict]:
         for url in urls:
             try:
                 driver.get(url)
-                WebDriverWait(driver, 8).until(
+                WebDriverWait(driver, 12).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
                 text = driver.find_element(By.TAG_NAME, "body").text

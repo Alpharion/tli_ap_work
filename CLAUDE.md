@@ -79,6 +79,13 @@ Single-file Flask backend (`app.py`) + single-template frontend (`templates/inde
 - `GET /api/providers` — returns list of providers with `configured` flag
 - `POST /api/export/pdf` and `POST /api/export/docx` — download report endpoints (called from frontend)
 
+**Verification layer (`verify.py`):** Flask Blueprint (`verify_bp`) registered in `app.py`. Reads an exported `.xlsx` file, runs three checks per supplier row (company exists, supply ties, correct component) using Selenium + Microsoft Edge headlessly against Bing, then calls `call_ai` for LLM judgment. Returns an annotated Excel with five added columns: `Verification Notes | Company Exists | Supply Ties | Correct Component Supplied | URLs`. Uses the same per-run SSE queue pattern as `app.py` (`_verify_queues` dict keyed by `stream_id`).
+
+**Verify routes (from `verify_bp`):**
+- `POST /api/verify/upload` — accepts `.xlsx`, starts background verification thread, returns `stream_id`
+- `GET /api/verify/stream/<stream_id>` — SSE stream of verification progress
+- `GET /api/verify/download/<stream_id>` — returns annotated Excel when complete
+
 ## Key Constraints
 
 - `available_providers()` currently returns only Anthropic. To re-enable other providers, uncomment the relevant entries in that function.

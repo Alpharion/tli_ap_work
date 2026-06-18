@@ -21,13 +21,7 @@ from urllib.parse import quote_plus
 import openpyxl
 from flask import Blueprint, Response, jsonify, request, send_file
 from openpyxl.styles import Font, PatternFill
-from selenium import webdriver
-from selenium.webdriver.edge.service import Service as EdgeService
-from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 # ── Import shared helpers from app.py ─────────────────────────────────────────
 # These are imported at call-time (inside functions) to avoid circular imports
@@ -44,7 +38,7 @@ _verify_queues_lock = threading.Lock()
 
 def playwright_search(query: str, n: int = 4, log_fn=None) -> list[dict]:
     """
-    Search Bing headlessly via Selenium + system Edge and scrape the top n article pages.
+    Search Bing headlessly via Playwright + Chromium and scrape the top n article pages.
     Returns a list of {"url": str, "content": str} dicts.
     Falls back to [] on any failure so callers degrade gracefully.
     log_fn(msg, is_error): optional callback to push log lines to the SSE queue.
@@ -58,82 +52,58 @@ def playwright_search(query: str, n: int = 4, log_fn=None) -> list[dict]:
     search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
     SKIP_DOMAINS = ("bing.com", "microsoft.com", "msn.com", "go.microsoft.com")
 
-    driver = None
     try:
-        options = EdgeOptions()
-        options.add_argument("--headless=new")          # new headless mode — less detectable
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--ignore-certificate-errors")   # corporate SSL interception
-        options.add_argument("--ignore-ssl-errors")
-        options.add_argument("--allow-insecure-localhost")
-        options.add_argument("--disable-blink-features=AutomationControlled")  # anti-detection
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
-        )
-
-        # Pass system proxy settings through to Edge if set
-        import urllib.request
-        proxy = urllib.request.getproxies().get("https") or urllib.request.getproxies().get("http")
-        if proxy:
-            _log(f"[selenium] Using system proxy: {proxy}")
-            options.add_argument(f"--proxy-server={proxy}")
-
-        service = EdgeService(EdgeChromiumDriverManager().install())
-        driver = webdriver.Edge(service=service, options=options)
-        # Remove the webdriver flag that sites use to detect automation
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        driver.set_page_load_timeout(20)
-
-        # ── Step 1: fetch Bing search results page ────────────────────────
-        driver.get(search_url)
-        try:
-            WebDriverWait(driver, 8).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "#b_results"))
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
             )
-        except Exception as e:
-            _log(f"[selenium] Bing results page failed for query '{query}': {e}", is_error=True)
-            return []
+            page = context.new_page()
 
-        anchors = driver.find_elements(By.CSS_SELECTOR, "#b_results h2 a")
-        urls = []
-        for a in anchors:
-            href = a.get_attribute("href") or ""
-            if href.startswith("http") and not any(d in href for d in SKIP_DOMAINS):
-                urls.append(href)
-            if len(urls) >= n:
-                break
-
-        # ── Step 2: scrape each article page ─────────────────────────────
-        for url in urls:
+            # ── Step 1: fetch Bing search results page ────────────────────────
             try:
-                driver.get(url)
-                WebDriverWait(driver, 12).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                text = driver.find_element(By.TAG_NAME, "body").text
-                text = " ".join(text.split())[:2000]
-                results.append({"url": url, "content": text})
-                _log(f"[selenium] Scraped: {url}")
-            except Exception as e:
-                _log(f"[selenium] Failed to scrape {url}: {e}", is_error=True)
+                page.goto(search_url, timeout=20000, wait_until="domcontentloaded")
+                page.wait_for_selector("#b_results", timeout=8000)
+            except PlaywrightTimeoutError as e:
+                _log(f"[playwright] Bing results page failed for '{query}': {e}", is_error=True)
+                browser.close()
+                return []
 
-        _log(f"[selenium] Completed webcrawl for '{query}' — {len(results)} page(s) scraped")
+            anchors = page.query_selector_all("#b_results h2 a, .b_algo h2 a")
+            _log(f"[playwright] Raw anchors found: {len(anchors)}")
+
+            urls = []
+            for a in anchors:
+                href = a.get_attribute("href") or ""
+                if href.startswith("http") and not any(d in href for d in SKIP_DOMAINS):
+                    urls.append(href)
+                if len(urls) >= n:
+                    break
+
+            _log(f"[playwright] URLs after filter: {len(urls)}")
+
+            # ── Step 2: scrape each article page ─────────────────────────────
+            for url in urls:
+                try:
+                    page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                    text = page.inner_text("body")
+                    text = " ".join(text.split())[:2000]
+                    results.append({"url": url, "content": text})
+                    _log(f"[playwright] Scraped: {url}")
+                except Exception as e:
+                    _log(f"[playwright] Failed to scrape {url}: {e}", is_error=True)
+
+            browser.close()
 
     except Exception as e:
-        _log(f"[selenium] Unexpected error for query '{query}': {e}", is_error=True)
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+        _log(f"[playwright] Unexpected error for '{query}': {e}", is_error=True)
 
+    _log(f"[playwright] Completed webcrawl for '{query}' — {len(results)} page(s) scraped")
     return results
 
 

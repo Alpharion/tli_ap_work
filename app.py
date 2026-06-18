@@ -29,9 +29,6 @@ import tempfile
 app = Flask(__name__)
 CORS(app)
 
-from verify import verify_bp
-app.register_blueprint(verify_bp)
-
 # ── Country coords ────────────────────────────────────────────────────────────
 COUNTRY_COORDS = {
     "united states":(37.09,-95.71),"usa":(37.09,-95.71),"us":(37.09,-95.71),
@@ -102,33 +99,13 @@ YET TO BE DONE
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
-"Filament type raw material for printers (PLA, ABS PETG, PP etc) for printing drone (mini class, weight <=5, size <=450mm)",
-"Powder type raw materials for printers (stainless steel 216L, thermoplastic powders) for printing drone (mini class, weight <=5, size <=450mm)",
-"High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",
-"Propeller for drones (mini class, weight <=5, size <=450mm)",
-"DC Brushless Motor for drone (mini class, weight <=5, size <=450mm)",
-"Radio Receiver and Transmitter for drone (mini class, weight <=5, size <=450mm)",
-"Camera with Gimbal for drone (mini class, weight <=5, size <=450mm)",
-"Ground Controlling Unit for drone (mini class, weight <=5, size <=450mm)",
-"Battery Management System for drone (mini class, weight <=5, size <=450mm)",
-"Connectors and Cables for drone (mini class, weight <=5, size <=450mm)",
-
-NEED TO DO POLYMER PRINTER AGN
 """
 
 PRODUCTS_TO_TEST = [
-"Mini Drone body frame",
-"Mini Drone Electronic Speed Controller",
-"Mini Drone Flight Processing Controller",
-"Mini Drone Antenna",
-"Mini Drone GPS",
-"Mini Drone battery cells", #HERE
-"Mini Drone Thermal management materials",
-"Wire Arc AM Printer for Mini Drones",
-"High resolution 3D scanners for mini drones"
+"Lithium ion battery 18650 cylindrical"
 ]
 
-DEPTH    = 2      # supply chain depth per product (1–3),
+DEPTH    = 2      # supply chain depth per product (1–3)
 PROVIDER = "gemini" # which provider to use: anthropic | openai | gemini | deepseek
 
 
@@ -201,11 +178,9 @@ def extract_balanced(text: str, open_char: str, close_char: str) -> str | None:
     return best
 
 
-def safe_parse_json(text) -> list | dict | None:
+def safe_parse_json(text: str) -> list | dict | None:
     """Try multiple strategies to parse potentially malformed JSON from AI."""
-    if not text:
-        return None
-    cleaned = clean_json(str(text))
+    cleaned = clean_json(text)
 
     # Strategy 1: direct parse of cleaned text
     try:
@@ -250,6 +225,8 @@ def safe_parse_json(text) -> list | dict | None:
 
     return None
 
+# Global URL cache for NATO Admiralty rating
+_source_url_cache: dict = {}
 
 # ── Search backends ───────────────────────────────────────────────────────────
 
@@ -275,15 +252,18 @@ def ddg_search_and_scrape(query: str, n: int = 4) -> str:
             print(f"DDG attempt {attempt+1} failed: {e}")
 
     if not results:
+        _source_url_cache[query] = []  
         print(f"Search unavailable for: {query} — AI will use training knowledge")
         return ""   # empty string signals to use knowledge-only prompt
 
     parts = []
+    urls, parts = [], []
     for r in results[:3]:
         url = r.get("href","")
         snippet = r.get("body","")
         page = ""
         if url:
+            urls.append(url) 
             try:
                 hdrs = {"User-Agent":"Mozilla/5.0 (compatible; SupplierMapper/1.0)"}
                 resp = requests.get(url, headers=hdrs, timeout=8)
@@ -293,6 +273,7 @@ def ddg_search_and_scrape(query: str, n: int = 4) -> str:
                 page = soup.get_text(separator=" ",strip=True)[:1500]
             except: pass
         parts.append(f"SOURCE: {url}\nSNIPPET: {snippet}\nCONTENT: {page}")
+        _source_url_cache[query] = urls
     return "\n---\n".join(parts)
 
 def gemini_search_and_answer(query: str, api_key: str) -> str:
@@ -406,12 +387,6 @@ def build_prompt_with_evidence(base_prompt: str, evidence: str) -> str:
 {"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4.1-mini",
     "env":"OPENAI_API_KEY","configured":bool(os.getenv("OPENAI_API_KEY")),
     "search":"DuckDuckGo"},
-        {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
-         "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),
-         "search":"Google Search (built-in)"},
-        {"id":"deepseek","name":"DeepSeek V3","model":"deepseek-chat",
-         "env":"DEEPSEEK_API_KEY","configured":bool(os.getenv("DEEPSEEK_API_KEY")),
-         "search":"DuckDuckGo"},
 """
 
 def available_providers() -> list[dict]:
@@ -419,7 +394,7 @@ def available_providers() -> list[dict]:
         {"id":"anthropic","name":"Anthropic Claude","model":"claude-sonnet-4-6",
          "env":"ANTHROPIC_API_KEY","configured":bool(os.getenv("ANTHROPIC_API_KEY")),
          "search":"DuckDuckGo"},
-         {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
+        {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
          "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),
          "search":"Google Search (built-in)"},
         {"id":"deepseek","name":"DeepSeek V3","model":"deepseek-chat",
@@ -614,6 +589,87 @@ List 2-8 significant OEMs as SEPARATE array elements."""
                 oem["confidence"] = "low"
                 oem["flagged"] = True
     '''
+    # ── Market Share Research (IDC/Gartner/Statista) ─────────────────────────
+    push("status", message="📊 Researching market share from industry reports…")
+    pname = product_info.get("product_name","")
+    iname = product_info.get("industry","")
+    cname = product_info.get("product_category","")
+    oem_names_str = ", ".join([o.get("company_name","") for o in oem_list if o.get("company_name","")])
+
+    ms_queries = [
+        f"{pname} {cname} market share IDC Gartner Statista 2024 2025",
+        f"{iname} {pname} manufacturer market share percentage revenue report",
+        f"{oem_names_str} {pname} market share ranking",
+    ]
+    ms_parts, ms_urls = [], []
+    for q in ms_queries:
+        ev = get_evidence(q, provider)
+        if ev and ev.strip():
+            ms_parts.append(ev)
+            ms_urls.extend(_source_url_cache.get(q, []))
+            push("status", message=f"  🌐 Market data: {q[:60]}…")
+
+    ms_note = (
+        "Market research findings:\n" + "\n---\n".join(ms_parts)
+        if ms_parts else
+        "No live market data — estimate from training knowledge."
+    )
+
+    ms_prompt = f"""You are a market intelligence analyst.
+Product: {pname} ({iname} / {cname})
+Known OEMs: {oem_names_str}
+
+{ms_note}
+
+Based on evidence above, estimate each OEM's market share.
+Use actual numbers where found (e.g. "~32% global market").
+
+Return ONLY a valid JSON array (no markdown). Each element:
+{{
+  "company_name": "exact name matching OEM list above",
+  "market_share": "high|medium|low",
+  "market_share_pct": "e.g. ~35% or 10-15% or <5% or unknown",
+  "market_share_source": "e.g. IDC Q3 2024, Gartner 2023, estimated",
+  "market_rank": 1
+}}
+Rank 1=largest. Only include companies from the known OEMs list."""
+
+    try:
+        raw_ms = call_ai(ms_prompt, provider, max_tokens=800)
+        ms_data = safe_parse_json(raw_ms)
+        if isinstance(ms_data, list):
+            ms_lookup = {m.get("company_name","").strip().lower(): m for m in ms_data}
+            enriched = 0
+            for oem_entry in oem_list:
+                key = oem_entry.get("company_name","").strip().lower()
+                match = ms_lookup.get(key)
+                if not match:
+                    for k, v in ms_lookup.items():
+                        if key in k or k in key:
+                            match = v; break
+                if match:
+                    oem_entry["market_share"]        = match.get("market_share", oem_entry.get("market_share","unknown"))
+                    oem_entry["market_share_pct"]    = match.get("market_share_pct","unknown")
+                    oem_entry["market_share_source"] = match.get("market_share_source","unknown")
+                    oem_entry["market_rank"]         = match.get("market_rank", 99)
+                    enriched += 1
+                else:
+                    oem_entry.setdefault("market_share_pct","unknown")
+                    oem_entry.setdefault("market_share_source","AI estimate")
+                    oem_entry.setdefault("market_rank", 99)
+            oem_list.sort(key=lambda x: x.get("market_rank", 99))
+            push("status", message=f"  ✅ Market share enriched for {enriched}/{len(oem_list)} OEMs")
+        else:
+            push("status", message="  ⚠️ Could not parse market share data")
+            for oem in oem_list:
+                oem.setdefault("market_share_pct","unknown")
+                oem.setdefault("market_share_source","AI estimate")
+    except Exception as e:
+        push("status", message=f"  ⚠️ Market share error: {e}")
+        for oem_entry in oem_list:
+            oem_entry.setdefault("market_share_pct","unknown")
+            oem_entry.setdefault("market_share_source","AI estimate")
+
     # Ensure primary OEM is always in the list
     primary_oem = product_info.get("oem_manufacturer","")
     if primary_oem and primary_oem.lower() not in ("unknown",""):
@@ -1048,18 +1104,13 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
     One sheet per tier, all products combined.
     Columns: Product | Company | Country | Supplies To | OEM Root | Components | Confidence | Source
     """
-    base_headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Flagged"]
-    verify_headers = ["Verification Notes", "Company Exists", "Supply Ties Exist", "Correct Component Supplied", "URL"]
-    headers = base_headers + verify_headers
-    col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 40, 14, 14, 14, 50]
+    headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URLs", "Verification Layer", "Flagged"]
+    col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 14, 40, 50, 8, 10]
     set_col_widths(ws, col_widths)
 
     hdr_fill = HDR_TIER[tier_num-1] if tier_num - 1 < len(HDR_TIER) else _fill("37474F")
-    verify_fill = _fill("E65100")
-    for ci, h in enumerate(base_headers, 1):
+    for ci, h in enumerate(headers, 1):
         hdr_cell(ws, 1, ci, h, hdr_fill)
-    for ci, h in enumerate(verify_headers, len(base_headers) + 1):
-        hdr_cell(ws, 1, ci, h, verify_fill)
     ws.row_dimensions[1].height = 24
 
     row = 2
@@ -1079,10 +1130,15 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
                 data_cell(ws, row, 7, s.get("confidence", ""), fill=fill)
                 data_cell(ws, row, 8, s.get("source_hint", ""), fill=fill)
                 data_cell(ws, row, 9, prov_id, fill=fill)
-                data_cell(ws, row, 10, str(s.get("flagged", False)), fill=fill)
-                # cols 11-15: verification columns left empty (to be filled by verify layer)
+                v = s.get("_verification", {})
+                data_cell(ws, row, 10, str(v.get("verified", "—")), fill=fill)
+                data_cell(ws, row, 11, v.get("confidence", "—"), fill=fill)
+                data_cell(ws, row, 12, v.get("reason", "—"), fill=fill)
+                data_cell(ws, row, 13, ", ".join(v.get("source_urls", [])), fill=fill)
+                data_cell(ws, row, 14, str(v.get("layer", "—")), fill=fill)
+                data_cell(ws, row, 15, str(s.get("flagged", False)), fill=fill)
                 row += 1
-
+    
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row-1}"
 
@@ -1126,8 +1182,8 @@ def write_product_sheet(ws, result: dict):
 
     current_row = len(overview_fields) + 5
 
-    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint", "Source URL"]
-    tier_widths  = [28, 14, 22, 20, 32, 11, 35, 50]
+    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint"]
+    tier_widths  = [28, 14, 22, 20, 32, 11, 35]
 
     # ── One section per provider ──────────────────────────────────────────────
     for prov_id, sc in provider_results.items():
@@ -1136,7 +1192,7 @@ def write_product_sheet(ws, result: dict):
         prov_heading = ws.cell(row=current_row, column=1, value=f"Provider: {prov_id.upper()}")
         prov_heading.font = Font(name=FONT, bold=True, size=12, color="FFFFFF")
         prov_heading.fill = _fill("37474F")
-        ws.merge_cells(f"A{current_row}:H{current_row}")
+        ws.merge_cells(f"A{current_row}:G{current_row}")
         ws.row_dimensions[current_row].height = 22
         current_row += 1
 
@@ -1144,7 +1200,7 @@ def write_product_sheet(ws, result: dict):
         summary_cell = ws.cell(row=current_row, column=1, value=sc.get("summary", "No summary generated."))
         summary_cell.font = _font()
         summary_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-        ws.merge_cells(f"A{current_row}:H{current_row}")
+        ws.merge_cells(f"A{current_row}:G{current_row}")
         ws.row_dimensions[current_row].height = 50
         current_row += 2
 
@@ -1163,7 +1219,7 @@ def write_product_sheet(ws, result: dict):
                                value=f"{tier_label} ({len(suppliers)} suppliers)")
             heading.font = Font(name=FONT, bold=True, size=11, color="FFFFFF")
             heading.fill = hdr_fill
-            ws.merge_cells(f"A{current_row}:H{current_row}")
+            ws.merge_cells(f"A{current_row}:G{current_row}")
             ws.row_dimensions[current_row].height = 22
             current_row += 1
 
@@ -1187,7 +1243,6 @@ def write_product_sheet(ws, result: dict):
                 data_cell(ws, current_row, 5, ", ".join(s.get("components_supplied") or []), fill=fill)
                 data_cell(ws, current_row, 6, s.get("confidence", ""),    fill=fill)
                 data_cell(ws, current_row, 7, s.get("source_hint", ""),   fill=fill)
-                data_cell(ws, current_row, 8, s.get("source_url", ""),    fill=fill)
                 ws.row_dimensions[current_row].height = 60
                 current_row += 1
 
@@ -1527,184 +1582,6 @@ def multi_export_download(file_id):
     return response
     
 
-@app.route('/dev/agentic_export')
-def agentic_export():
-    """
-    Dev export page for run_agentic_pipeline.
-    Usage: /dev/agentic_export?product=Gimbal+Camera&depth=2
-    Renders a black terminal page that streams progress and auto-downloads the .xlsx.
-    """
-    product = request.args.get("product", "").strip()
-    depth   = request.args.get("depth", "2")
-    if not product:
-        return Response("<p>Missing ?product= param</p>", mimetype="text/html", status=400)
-
-    accept = request.headers.get("Accept", "")
-    if "text/html" in accept:
-        from urllib.parse import quote
-        stream_url = f"/dev/agentic_export/stream?product={quote(product)}&depth={depth}"
-        download_base = "/dev/agentic_export/download"
-        return Response(f"""<!DOCTYPE html>
-<html>
-<head>
-  <title>Agentic Export — {product}</title>
-  <style>
-    body {{ font-family: monospace; padding: 2rem; background: #111; color: #eee; }}
-    .done {{ color: #4caf50; }}
-    .error {{ color: #f44336; }}
-    h2 span {{ color: #e8ff47; }}
-  </style>
-</head>
-<body>
-  <h2>Agentic Export — <span>{product}</span> (depth {depth})</h2>
-  <div id="log"></div>
-  <script>
-    const log = document.getElementById('log');
-    const append = (msg, cls) => {{
-      const d = document.createElement('div');
-      d.className = cls || '';
-      d.textContent = msg;
-      log.appendChild(d);
-    }};
-
-    const evtSource = new EventSource('{stream_url}');
-
-    evtSource.onmessage = (e) => {{
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'start') {{
-        append(`Starting agentic export for ${{msg.total}} product(s)...`);
-      }} else if (msg.type === 'status') {{
-        append(msg.message);
-      }} else if (msg.type === 'file_ready') {{
-        append(`[${{msg.index}}/${{msg.total}}] ✓ ${{msg.filename}}`, 'done');
-        const a = document.createElement('a');
-        a.href = `{download_base}/${{msg.file_id}}`;
-        a.download = msg.filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }} else if (msg.type === 'error') {{
-        append(`[error] ${{msg.product}}: ${{msg.error}}`, 'error');
-      }} else if (msg.type === 'done') {{
-        append(`Export complete.`, 'done');
-        evtSource.close();
-      }}
-    }};
-
-    evtSource.onerror = () => {{
-      append('SSE connection lost.', 'error');
-      evtSource.close();
-    }};
-  </script>
-</body>
-</html>""", mimetype="text/html")
-
-    return Response(status=400)
-
-
-@app.route('/dev/agentic_export/stream')
-def agentic_export_stream():
-    """SSE stream that runs run_agentic_pipeline and yields progress + file_ready events."""
-    product_input = request.args.get("product", "").strip()
-    depth         = max(1, min(int(request.args.get("depth", 2)), 3))
-
-    if not product_input:
-        def err():
-            yield f"data: {json.dumps({'type': 'error', 'product': '', 'error': 'Missing product param'})}\n\n"
-        return Response(err(), mimetype="text/event-stream")
-
-    def generate():
-        collected_oems  = []
-        collected_tiers = {}
-        total = 1
-
-        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
-        print(f"\n[agentic_export] ── Product: {product_input} | depth={depth}")
-
-        queue = []
-        try:
-            run_agentic_pipeline(product_input, depth, queue, collected_oems, collected_tiers)
-        except Exception as e:
-            print(f"[agentic_export] Pipeline error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'product': product_input, 'error': str(e)})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
-            return
-
-        # Stream status messages to the browser as they come
-        for event in queue:
-            if event.get("type") == "status":
-                yield f"data: {json.dumps(event)}\n\n"
-
-        # Extract the supply_chain from the "complete" event
-        supply_chain = None
-        for event in queue:
-            if event.get("type") == "complete":
-                supply_chain = event.get("supply_chain", {})
-                break
-
-        if not supply_chain:
-            supply_chain = {"product": {"product_name": product_input}, "oems": [], "tiers": {}}
-
-        # build_bulk_workbook expects a list of result dicts (one per product)
-        result = [{
-            "product_input": product_input,
-            "supply_chain":  supply_chain,
-            "provider_results": {"agentic": supply_chain},
-            "sheet_prefix":  safe_sheet_name(product_input, 1)
-        }]
-        wb_bytes = build_bulk_workbook(result, "agentic", depth)
-
-        file_id  = str(uuid.uuid4())
-        filename = safe_filename(product_input, 1)
-        tmp_path = os.path.join(tempfile.gettempdir(), f"{file_id}.xlsx")
-
-        with open(tmp_path, "wb") as f:
-            f.write(wb_bytes)
-
-        with _export_files_lock:
-            _export_files[file_id] = {"path": tmp_path, "filename": filename}
-
-        tier_counts = {k: len(v) for k, v in supply_chain.get("tiers", {}).items()}
-        print(f"[agentic_export] Ready: {filename} | oems={len(supply_chain.get('oems', []))} tiers={tier_counts}")
-
-        yield f"data: {json.dumps({'type': 'file_ready', 'file_id': file_id, 'filename': filename, 'index': 1, 'total': total})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
-
-    return Response(generate(), mimetype="text/event-stream", headers={
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-    })
-
-
-@app.route('/dev/agentic_export/download/<file_id>')
-def agentic_export_download(file_id):
-    """Download the temp .xlsx produced by agentic_export_stream."""
-    with _export_files_lock:
-        entry = _export_files.pop(file_id, None)
-
-    if not entry:
-        return jsonify({"error": "File not found or already downloaded"}), 404
-
-    path     = entry["path"]
-    filename = entry["filename"]
-
-    response = send_file(
-        path,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name=filename
-    )
-
-    @response.call_on_close
-    def cleanup():
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-    return response
-
-
 @app.route('/api/map_all')
 def map_all():
     collected_oems = []
@@ -1787,644 +1664,6 @@ def map_suppliers():
                     headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
 
-# ── Agentic pipeline helpers ──────────────────────────────────────────────────
-
-def gemini_enrich_suppliers(parent: str, product_name: str, suppliers: list, api_key: str) -> list:
-    """
-    One Gemini grounding call per parent.
-    Asks Gemini to attach a source_hint and a source_url to each supplier record.
-    Returns the enriched list, or the original list unchanged if Gemini fails.
-    """
-    if not suppliers or not api_key:
-        return suppliers
-
-    names_json = json.dumps([
-        {"company_name": s.get("company_name", ""), "country": s.get("country", "")}
-        for s in suppliers
-    ])
-
-    prompt = f"""You are a supply chain research assistant with access to Google Search.
-
-Product: {product_name}
-Parent company being supplied: {parent}
-
-The following companies are claimed to supply {parent} with components for {product_name}:
-{names_json}
-
-For EACH company, search for and provide:
-1. A short source_hint (max 15 words) citing a specific article, report, or press release that confirms the supply relationship.
-2. A source_url — the URL of that article/report (must be a real, specific URL, not a homepage).
-
-Return ONLY a valid JSON array with one object per company, preserving the original company_name exactly:
-[
-  {{
-    "company_name": "exact name from input",
-    "source_hint": "short citation of confirming source",
-    "source_url": "https://..."
-  }},
-  ...
-]
-
-If you cannot find a specific source for a company, use source_hint: "No public source found" and source_url: "".
-Do NOT add or remove companies from the list."""
-
-    try:
-        from google import genai
-        from google.genai import types
-        client = genai.Client(api_key=api_key)
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())]
-            )
-        )
-        text_parts = []
-        candidates = getattr(resp, "candidates", [])
-        if candidates and getattr(candidates[0], "content", None):
-            for part in candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    text_parts.append(part.text)
-        raw = "\n".join(text_parts)
-        enrichments = safe_parse_json(raw)
-
-        if not isinstance(enrichments, list):
-            return suppliers
-
-        # Build a lookup by company name (lowercase) so we can merge into the original records
-        lookup = {e.get("company_name", "").lower(): e for e in enrichments}
-        enriched = []
-        for s in suppliers:
-            key = s.get("company_name", "").lower()
-            match = lookup.get(key)
-            if match:
-                merged = {**s}
-                if match.get("source_hint"):
-                    merged["source_hint"] = match["source_hint"]
-                if match.get("source_url"):
-                    merged["source_url"] = match["source_url"]
-                enriched.append(merged)
-            else:
-                enriched.append(s)
-        return enriched
-
-    except Exception as e:
-        print(f"[gemini_enrich_suppliers] Failed for parent={parent}: {e}")
-        return suppliers  # graceful degradation — callers always get a list back
-
-
-def gemini_dedupe_companies(records: list, api_key: str, record_type: str = "supplier") -> list:
-    """
-    One Gemini call to cluster records that name the same company differently
-    (e.g. "TSMC" vs "Taiwan Semiconductor Manufacturing").
-    Gemini only decides which names are the same; Python does the field merge.
-    Returns the deduplicated list, or the original list if Gemini fails.
-    """
-    if len(records) < 2 or not api_key:
-        return records
-
-    name_list = [
-        {"index": i, "company_name": r.get("company_name", ""), "country": r.get("country", "")}
-        for i, r in enumerate(records)
-    ]
-
-    prompt = f"""You are a company name deduplication specialist.
-
-The following list contains {record_type} company names. Some entries may refer to the same
-company using different naming conventions (e.g. abbreviations, full legal names, common names).
-
-{json.dumps(name_list, indent=2)}
-
-Identify groups of entries that refer to the SAME real-world company.
-For each group, pick ONE canonical name (prefer the most widely recognised short form, e.g. "TSMC" over "Taiwan Semiconductor Manufacturing Company").
-
-Return ONLY a valid JSON array of clusters. Each cluster is an object with:
-- "canonical_name": the name to keep
-- "canonical_country": the country to keep (use the most specific/accurate one)
-- "indices": list of index values from the input that belong to this cluster
-
-Every input index must appear in exactly one cluster. Singletons (no duplicates) still appear as a cluster of one.
-
-Example:
-[
-  {{"canonical_name": "TSMC", "canonical_country": "Taiwan", "indices": [0, 3]}},
-  {{"canonical_name": "Samsung", "canonical_country": "South Korea", "indices": [1]}}
-]"""
-
-    try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        raw_text = getattr(resp, "text", None) or ""
-        clusters = safe_parse_json(raw_text)
-
-        if not isinstance(clusters, list):
-            return records
-
-        # Merge each cluster into one record using Python deterministically
-        confidence_rank = {"high": 3, "medium": 2, "low": 1}
-        merged_records = []
-
-        for cluster in clusters:
-            indices = cluster.get("indices", [])
-            if not indices:
-                continue
-
-            # Filter to valid indices only
-            valid = [records[i] for i in indices if 0 <= i < len(records)]
-            if not valid:
-                continue
-
-            # Start from the first record in the cluster as the base
-            base = {**valid[0]}
-
-            # Apply canonical name/country from Gemini
-            base["company_name"] = cluster.get("canonical_name", base.get("company_name", ""))
-            base["country"] = cluster.get("canonical_country", base.get("country", ""))
-
-            # Merge fields across duplicates
-            for other in valid[1:]:
-                # Keep highest confidence
-                if confidence_rank.get(other.get("confidence", ""), 0) > confidence_rank.get(base.get("confidence", ""), 0):
-                    base["confidence"] = other["confidence"]
-                # Union components_supplied
-                existing_comps = set(base.get("components_supplied") or [])
-                for c in (other.get("components_supplied") or []):
-                    existing_comps.add(c)
-                base["components_supplied"] = list(existing_comps)
-                # Keep non-empty source_hint / source_url
-                if not base.get("source_hint") and other.get("source_hint"):
-                    base["source_hint"] = other["source_hint"]
-                if not base.get("source_url") and other.get("source_url"):
-                    base["source_url"] = other["source_url"]
-                # Keep non-empty notes (OEM records)
-                if not base.get("notes") and other.get("notes"):
-                    base["notes"] = other["notes"]
-
-            merged_records.append(base)
-
-        # Safety check: if something went wrong and we lost records, fall back
-        if not merged_records:
-            return records
-
-        return merged_records
-
-    except Exception as e:
-        print(f"[gemini_dedupe_companies] Failed: {e} — falling back to exact-string dedup")
-        # Fallback: exact string dedup (same as run_pipeline)
-        seen, unique = set(), []
-        for r in records:
-            key = r.get("company_name", "").strip().lower()
-            if key and key not in seen:
-                seen.add(key)
-                unique.append(r)
-        return unique
-
-
-# ── Agentic pipeline ──────────────────────────────────────────────────────────
-
-def run_agentic_pipeline(product_input: str, depth: int, queue: list, oem_context: list, collected_tiers: dict):
-    """
-    Multi-model agentic supply-chain pipeline.
-
-    Role split:
-    - Anthropic: product ID, supplier-tie inference + components (non-China only), summary
-    - DeepSeek:  China-based companies at OEM discovery and every tier
-    - Gemini:    per-parent URL enrichment + per-tier / OEM deduplication
-
-    Emits the same SSE event shapes as run_pipeline so the frontend works unchanged.
-    """
-    def push(t, **kw):
-        queue.append({"type": t, **kw})
-
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
-    gemini_key    = os.getenv("GEMINI_API_KEY", "")
-    deepseek_key  = os.getenv("DEEPSEEK_API_KEY", "")
-
-    has_gemini   = bool(gemini_key)
-    has_deepseek = bool(deepseek_key)
-
-    push("status", message="🤖 Agentic mode | Anthropic=ties, Gemini=sources+dedup, DeepSeek=China")
-    if not has_gemini:
-        push("status", message="⚠️ GEMINI_API_KEY not set — enrichment and LLM dedup skipped")
-    if not has_deepseek:
-        push("status", message="⚠️ DEEPSEEK_API_KEY not set — China-company step skipped")
-
-    # ── Step 1: Product identification (Anthropic + DDG) ──────────────────────
-    push("status", message=f"🔍 Identifying product: {product_input}")
-    id_evidence = ddg_search_and_scrape(
-        f"{product_input} product specification manufacturer supply chain", n=4)
-    evidence_note = (
-        f"Web research findings:\n{id_evidence}" if id_evidence
-        else "No live web search available — use your training knowledge."
-    )
-    push("status", message="✅ Web evidence gathered" if id_evidence else "⚠️ Search unavailable — using AI training knowledge")
-
-    id_prompt = f"""You are a supply chain research assistant.
-Product/Part input: "{product_input}"
-
-{evidence_note}
-
-Return ONLY valid JSON (no markdown) with this exact schema:
-{{
-  "product_name": "...",
-  "product_category": "...",
-  "industry": "...",
-  "description": "...",
-  "key_components": ["...", "..."],
-  "oem_manufacturer": "... or unknown",
-  "oem_country": "country name or unknown"
-}}"""
-
-    try:
-        raw = call_ai(id_prompt, "anthropic", max_tokens=800)
-        parsed_product = safe_parse_json(raw)
-        product_info = parsed_product if isinstance(parsed_product, dict) else None
-        if not product_info:
-            raise ValueError("No valid JSON returned")
-    except Exception as e:
-        push("status", message=f"⚠️ Product ID parse error: {e}")
-        product_info = {
-            "product_name": product_input, "product_category": "Unknown",
-            "industry": "Unknown", "description": "Could not auto-identify.",
-            "key_components": [], "oem_manufacturer": "Unknown", "oem_country": "Unknown"
-        }
-
-    coords = get_coords(product_info.get("oem_country", ""))
-    if coords:
-        product_info["lat"], product_info["lng"] = coords
-
-    push("product_identified", product=product_info)
-    push("status", message=f"✅ Identified: {product_info.get('product_name')}")
-
-    # ── Step 2: OEM discovery ─────────────────────────────────────────────────
-    push("status", message="🏢 [Anthropic] Searching for non-China OEM manufacturers…")
-    oem_evidence = ddg_search_and_scrape(
-        f"{product_info.get('product_name')} manufacturers OEM brands companies who make produce", n=4)
-    oem_evidence_note = (
-        f"Web research findings:\n{oem_evidence}" if oem_evidence
-        else "No live web search — use your training knowledge."
-    )
-
-    existing_note = ""
-    if oem_context:
-        names = ", ".join(oem_context)
-        existing_note = f"\nEXISTING COMPANIES ALREADY IN LIST: {names}\n- Do not add duplicates.\n"
-
-    # Shared OEM schema description used by both prompts below
-    oem_schema = """{
-  "company_name": "exact company name",
-  "country": "country name",
-  "role": "OEM manufacturer | Brand owner | Contract manufacturer | Licensor",
-  "market_share": "high|medium|low|unknown",
-  "confidence": "high|medium|low",
-  "notes": "brief note"
-}"""
-
-    oem_name_rules = """CRITICAL COMPANY NAME RULES:
-- Use the shortest globally recognised name only (e.g. "Samsung" not "Samsung Electronics Co. Ltd.")
-- No legal suffixes: drop Inc, Ltd, LLC, GmbH, Co., Corp, Group, Holdings
-- Use English names only
-- Use acronyms where standard (TSMC, BASF, ABB)"""
-
-    # Anthropic: non-China OEMs
-    anthropic_oem_prompt = f"""You are a supply chain research assistant.
-Product: {product_info.get('product_name')} ({product_info.get('industry')})
-
-{oem_evidence_note}
-
-Find all known OEM manufacturers / brands that produce this product.
-Include the primary OEM already identified ({product_info.get('oem_manufacturer')}) plus any others.
-
-ELIGIBILITY: currently active, manufactured within the last 5 years, documented manufacturing activity.
-
-DO NOT include any China-based companies (mainland China or Hong Kong). A separate specialist covers those.
-
-{oem_name_rules}
-{existing_note}
-
-Return ONLY a raw JSON array. Each element:
-{oem_schema}
-
-List 2-6 significant non-China OEMs."""
-
-    # DeepSeek: China OEMs only
-    deepseek_oem_prompt = f"""You are a supply chain research assistant specialising in Chinese manufacturers.
-Product: {product_info.get('product_name')} ({product_info.get('industry')})
-
-Find China-based OEM manufacturers / brands (mainland China or Hong Kong ONLY) that produce this product.
-
-ELIGIBILITY: currently active, manufactured within the last 5 years, documented manufacturing activity.
-Include ONLY companies headquartered in mainland China or Hong Kong.
-
-{oem_name_rules}
-{existing_note}
-
-Return ONLY a raw JSON array. Each element:
-{oem_schema}
-
-List 2-5 significant China-based OEMs. If none exist for this product, return an empty array []."""
-
-    all_oems = []
-
-    try:
-        raw_oem = call_ai(anthropic_oem_prompt, "anthropic", max_tokens=1000)
-        parsed = safe_parse_json(raw_oem)
-        if isinstance(parsed, dict):
-            for v in parsed.values():
-                if isinstance(v, list):
-                    parsed = v
-                    break
-        if isinstance(parsed, list):
-            all_oems.extend(parsed)
-            push("status", message=f"  🤖 [Anthropic] {len(parsed)} non-China OEM(s) found")
-    except Exception as e:
-        push("status", message=f"⚠️ Anthropic OEM discovery error: {e}")
-
-    if has_deepseek:
-        push("status", message="🏢 [DeepSeek] Searching for China OEM manufacturers…")
-        try:
-            raw_ds_oem = call_ai(deepseek_oem_prompt, "deepseek", max_tokens=800)
-            parsed_ds = safe_parse_json(raw_ds_oem)
-            if isinstance(parsed_ds, dict):
-                for v in parsed_ds.values():
-                    if isinstance(v, list):
-                        parsed_ds = v
-                        break
-            if isinstance(parsed_ds, list) and parsed_ds:
-                all_oems.extend(parsed_ds)
-                push("status", message=f"  🇨🇳 [DeepSeek] {len(parsed_ds)} China OEM(s) found")
-        except Exception as e:
-            push("status", message=f"⚠️ DeepSeek OEM discovery error: {e}")
-
-    push("status", message=f"  📋 Combined: {len(all_oems)} OEM(s) before dedup")
-
-    # Gemini dedup on the full OEM list
-    if has_gemini and len(all_oems) > 1:
-        push("status", message="  🔀 [Gemini] Deduplicating OEM list…")
-        all_oems = gemini_dedupe_companies(all_oems, gemini_key, record_type="OEM manufacturer")
-        push("status", message=f"  ✅ {len(all_oems)} OEM(s) after dedup")
-
-    # Geocode OEMs and update context
-    for oem in all_oems:
-        name = oem.get("company_name", "")
-        if name and name not in oem_context:
-            oem_context.append(name)
-        c = get_coords(oem.get("country", ""))
-        if c:
-            oem["lat"], oem["lng"] = c
-
-    # Ensure primary OEM is always present (reuse logic from run_pipeline)
-    primary_oem = product_info.get("oem_manufacturer", "")
-    if primary_oem and primary_oem.lower() not in ("unknown", ""):
-        existing_names = [o.get("company_name", "").lower() for o in all_oems]
-        if not any(primary_oem.lower() in n or n in primary_oem.lower() for n in existing_names):
-            primary_coords = get_coords(product_info.get("oem_country", ""))
-            primary_entry = {
-                "company_name": primary_oem,
-                "country": product_info.get("oem_country", ""),
-                "role": "OEM manufacturer",
-                "market_share": "high",
-                "confidence": "high",
-                "notes": "Primary identified manufacturer"
-            }
-            if primary_coords:
-                primary_entry["lat"], primary_entry["lng"] = primary_coords
-            all_oems.insert(0, primary_entry)
-
-    push("oem_discovered", oems=all_oems)
-    push("status", message=f"✅ Found {len(all_oems)} OEM manufacturer(s)")
-
-    supply_chain = {"product": product_info, "oems": all_oems, "tiers": {}}
-
-    # ── Step 3: Tier supplier discovery ──────────────────────────────────────
-    # Each entry in current_parents is a (parent_name, oem_root) tuple so that
-    # oem_root is correctly threaded through every tier for every chain, not just
-    # fixed to the first OEM. Each parent produces at most 4 children per tier.
-    current_parents = [
-        (o.get("company_name", ""), o.get("company_name", ""))
-        for o in all_oems
-        if o.get("company_name", "").lower() not in ("unknown", "")
-    ]
-    if not current_parents:
-        fallback = product_info.get("oem_manufacturer", product_input)
-        current_parents = [(fallback, fallback)]
-
-    # Shared supplier JSON schema shown to LLMs as a format template.
-    # Field descriptions are instructions for the model, not Python placeholders.
-    # <parent> and <oem_root> are replaced per-call via .replace().
-    supplier_schema = """{
-  "company_name": "shortest recognised company name",
-  "country": "country name",
-  "supplies_to": "<parent>",
-  "oem_root": "<oem_root>",
-  "components_supplied": ["component1", "component2"],
-  "confidence": "high|medium|low",
-  "source_hint": "brief source note"
-}"""
-
-    for tier_num in range(1, depth + 1):
-        push("status", message=f"🏭 Researching Tier-{tier_num} suppliers… ({len(current_parents)} parent(s))")
-        tier_suppliers = []
-        next_parents = []  # (child_name, oem_root) pairs for the next tier
-
-        for parent, oem_root in current_parents:
-            if not parent or parent.lower() == "unknown":
-                continue
-
-            evidence = ddg_search_and_scrape(
-                f"{parent} suppliers components manufacturers supply chain", n=4)
-            evidence_note_tier = (
-                f"Web research findings:\n{evidence}" if evidence
-                else "No live web search — use your training knowledge."
-            )
-            status_icon = "🌐" if evidence else "🧠"
-            push("status", message=f"  {status_icon} [{oem_root}] → {parent}: searching suppliers…")
-
-            # Tier-1 prompt references the final product directly (parent IS the OEM).
-            # Tier-2+ prompts only mention the final product as background context;
-            # the inclusion rule focuses on what {parent} itself needs to manufacture —
-            # the model knows {parent}'s business and will surface the right inputs.
-            if tier_num == 1:
-                inclusion_rule = f'STRICT INCLUSION: supplier must physically supply {parent} with components or materials used in manufacturing "{product_info.get("product_name")}".'
-            else:
-                inclusion_rule = f'STRICT INCLUSION: supplier must physically supply {parent} with raw materials, sub-components, or process inputs that {parent} needs for its own manufacturing operations. Do NOT look for what goes into "{product_info.get("product_name")}" directly — focus on what {parent} itself consumes to produce its output.'
-
-            # ── Anthropic: non-China suppliers ─────────────────────────────
-            anthropic_tier_prompt = f"""You are a supply chain research assistant.
-Final product context: {product_info.get('product_name')} ({product_info.get('industry')}) — for supply chain scoping only.
-OEM root: {oem_root}
-Task: Find Tier-{tier_num} suppliers — companies that DIRECTLY supply: {parent}
-
-{evidence_note_tier}
-
-{inclusion_rule}
-STRICT EXCLUSION: logistics, services, unrelated product lines, same-product competitors, internal subsidiaries.
-DO NOT include China-based companies (mainland China or Hong Kong). A separate specialist covers those.
-
-{oem_name_rules}
-
-Return ONLY a valid JSON array. Each element:
-{supplier_schema.replace('<parent>', parent).replace('<oem_root>', oem_root)}
-
-List 3-5 distinct direct non-China suppliers to {parent} specifically."""
-
-            # ── DeepSeek: China-only suppliers ─────────────────────────────
-            deepseek_tier_prompt = f"""You are a supply chain research assistant specialising in Chinese manufacturers.
-Final product context: {product_info.get('product_name')} ({product_info.get('industry')}) — for supply chain scoping only.
-OEM root: {oem_root}
-Task: Find Tier-{tier_num} China-based suppliers — companies in mainland China or Hong Kong that DIRECTLY supply: {parent}
-
-{inclusion_rule}
-Include ONLY companies headquartered in mainland China or Hong Kong.
-STRICT EXCLUSION: logistics, services, unrelated product lines, same-product competitors.
-
-{oem_name_rules}
-
-Return ONLY a valid JSON array. Each element:
-{supplier_schema.replace('<parent>', parent).replace('<oem_root>', oem_root)}
-
-List 2-3 China-based suppliers to {parent}. If none exist, return []."""
-
-            parent_suppliers = []
-
-            try:
-                raw = call_ai(anthropic_tier_prompt, "anthropic", max_tokens=1200)
-                found = safe_parse_json(raw)
-                if isinstance(found, list):
-                    for s in found:
-                        s["oem_root"]    = oem_root
-                        s["supplies_to"] = parent
-                    parent_suppliers.extend(found)
-                    push("status", message=f"    🤖 [Anthropic] {len(found)} non-China supplier(s)")
-            except Exception as e:
-                push("status", message=f"  ⚠️ Anthropic parse error tier {tier_num} [{parent}]: {e}")
-
-            if has_deepseek:
-                try:
-                    raw_ds = call_ai(deepseek_tier_prompt, "deepseek", max_tokens=800)
-                    found_ds = safe_parse_json(raw_ds)
-                    if isinstance(found_ds, list) and found_ds:
-                        for s in found_ds:
-                            s["oem_root"]    = oem_root
-                            s["supplies_to"] = parent
-                        parent_suppliers.extend(found_ds)
-                        push("status", message=f"    🇨🇳 [DeepSeek] {len(found_ds)} China supplier(s)")
-                except Exception as e:
-                    push("status", message=f"  ⚠️ DeepSeek parse error tier {tier_num} [{parent}]: {e}")
-
-            # Gemini enrichment: one grounding call for this parent's combined batch
-            if has_gemini and parent_suppliers:
-                push("status", message=f"    🔗 [Gemini] Enriching sources for {parent}'s suppliers…")
-                parent_suppliers = gemini_enrich_suppliers(
-                    parent, product_info.get("product_name", ""), parent_suppliers, gemini_key)
-
-            # Cap at 4 children per parent, then register them as next-tier parents
-            capped = parent_suppliers[:4]
-            for s in capped:
-                child_name = s.get("company_name", "").strip()
-                if child_name and child_name.lower() != "unknown":
-                    next_parents.append((child_name, oem_root))
-
-            tier_suppliers.extend(parent_suppliers)
-
-        # Gemini dedup across the whole tier (all parents combined)
-        if has_gemini and len(tier_suppliers) > 1:
-            push("status", message=f"  🔀 [Gemini] Deduplicating Tier-{tier_num} list…")
-            tier_suppliers = gemini_dedupe_companies(
-                tier_suppliers, gemini_key, record_type=f"Tier-{tier_num} supplier")
-            push("status", message=f"  ✅ {len(tier_suppliers)} supplier(s) after dedup")
-        else:
-            # Fallback exact-string dedup when Gemini is unavailable
-            seen, unique = set(), []
-            for s in tier_suppliers:
-                key = s.get("company_name", "").strip().lower()
-                if key and key not in seen:
-                    seen.add(key)
-                    unique.append(s)
-            tier_suppliers = unique
-
-        # Geocode and register names for cross-product dedup context
-        for s in tier_suppliers:
-            c = get_coords(s.get("country", ""))
-            if c:
-                s["lat"], s["lng"] = c
-            name = s.get("company_name", "")
-            collected_tiers.setdefault(f"tier_{tier_num}", [])
-            if name and name not in collected_tiers[f"tier_{tier_num}"]:
-                collected_tiers[f"tier_{tier_num}"].append(name)
-
-        supply_chain["tiers"][f"tier_{tier_num}"] = tier_suppliers
-        push("tier_complete", tier=tier_num, suppliers=tier_suppliers)
-        push("status", message=f"✅ Tier-{tier_num}: {len(tier_suppliers)} supplier(s) found across {len(current_parents)} parent(s)")
-
-        # next_parents carries (child_name, oem_root) pairs into the next iteration
-        current_parents = next_parents
-        if not current_parents:
-            push("status", message=f"⚠️ No suppliers at Tier-{tier_num}, stopping.")
-            break
-
-    # ── Step 4: Executive summary (Anthropic) ─────────────────────────────────
-    push("status", message="📊 [Anthropic] Generating executive summary…")
-    summary_prompt = f"""You are a supply chain analyst.
-Supply chain data:
-{json.dumps(supply_chain, indent=2)[:6000]}
-
-Write a concise executive summary (150-200 words) covering:
-- What the product is and its industry
-- Key Tier-1 suppliers and their roles
-- Geographic concentration or risks (note any China-concentration flagged by DeepSeek)
-- Overall supply chain complexity
-Return plain text only, no markdown."""
-
-    try:
-        supply_chain["summary"] = call_ai(summary_prompt, "anthropic", max_tokens=400).strip()
-    except Exception as e:
-        supply_chain["summary"] = f"Summary unavailable: {e}"
-
-    supply_chain["provider"] = "agentic"
-    push("complete", supply_chain=supply_chain)
-
-
-# ── Agentic dev route ─────────────────────────────────────────────────────────
-
-@app.route("/api/map_agentic")
-def map_agentic():
-    """Dev endpoint for run_agentic_pipeline. Not wired to the UI dropdown yet."""
-    product = request.args.get("product", "").strip()
-    depth   = max(0, min(int(request.args.get("depth", 2)), 3))
-
-    if not product:
-        return jsonify({"error": "product required"}), 400
-
-    queue, done = [], threading.Event()
-
-    def run():
-        try:
-            run_agentic_pipeline(product, depth, queue, [], {})
-        except Exception as e:
-            queue.append({"type": "error", "message": str(e)})
-        finally:
-            done.set()
-
-    threading.Thread(target=run, daemon=True).start()
-
-    def generate():
-        sent = 0
-        while not done.is_set() or sent < len(queue):
-            while sent < len(queue):
-                yield sse(queue[sent])
-                sent += 1
-            time.sleep(0.1)
-        yield sse({"type": "stream_end"})
-
-    return Response(generate(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
 # ── Export routes ─────────────────────────────────────────────────────────────
 
 import subprocess
@@ -2461,35 +1700,12 @@ def find_node():
     return None
 
 
-@app.route("/api/export/excel", methods=["POST"])
-def export_excel():
-    try:
-        data = request.get_json(force=True)
-        supply_chain = data.get("supply_chain", {})
-        product_input = data.get("product_input", supply_chain.get("product", {}).get("product_name", "export"))
-        depth = int(data.get("depth", 3))
-
-        clean = re.sub(r'[\\/*?\[\]:]', '', product_input).strip()[:26]
-        sheet_prefix = f"1_{clean}"
-
-        results = [{"product_input": product_input, "supply_chain": supply_chain, "sheet_prefix": sheet_prefix}]
-
-        wb_bytes = build_bulk_workbook(results, supply_chain.get("provider", "Frontend Export"), depth)
-        buf = io.BytesIO(wb_bytes)
-        return send_file(buf, as_attachment=True,
-                         download_name=f"{clean}_supply_chain.xlsx",
-                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/api/export/docx", methods=["POST"])
 def export_docx():
     """Generate Word document using pure Python (python-docx). No Node.js needed."""
     try:
         from docx import Document
-        from docx.shared import Pt, RGBColor, Inches, Cm
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt, RGBColor, Inches
         from docx.oxml.ns import qn
         from docx.oxml import OxmlElement
         import io, datetime
@@ -2508,7 +1724,7 @@ def export_docx():
             RGBColor(0x7D, 0x3C, 0x98),
             RGBColor(0xCA, 0x6F, 0x1E),
         ]
-        TIER_HEX = ['2B7FCC','D4AC0D','7D3C98','CA6F1E']
+        TIER_HEX = ['2B7FCC', 'D4AC0D', '7D3C98', 'CA6F1E']
 
         def set_cell_bg(cell, hex_color):
             tc   = cell._tc
@@ -2521,7 +1737,7 @@ def export_docx():
 
         def add_cell_text(cell, text, bold=False, size=10, color=None, italic=False):
             para = cell.paragraphs[0]
-            run  = para.add_run(str(text or '—'))
+            run  = para.add_run(str(text if text is not None else '—'))
             run.bold   = bold
             run.italic = italic
             run.font.size = Pt(size)
@@ -2574,44 +1790,53 @@ def export_docx():
         oems = data.get('oems', [])
         if oems:
             doc.add_heading('2. OEM Manufacturers', level=1)
-            oem_rows = [('Company','Country','Role','Market Share','Notes')]
-            for oem in oems:
-                oem_rows.append((
-                    oem.get('company_name',''),
-                    oem.get('country',''),
-                    oem.get('role',''),
-                    oem.get('market_share',''),
-                    oem.get('notes',''),
-                ))
-            otbl = doc.add_table(rows=len(oem_rows), cols=5)
+            oem_headers = ['Rank', 'Company', 'Country', 'Role', 'Mkt Share', 'Share %', 'Source', 'Notes']
+            owidths = [Inches(0.5), Inches(1.2), Inches(0.8), Inches(1.0), Inches(0.8), Inches(0.7), Inches(1.0), Inches(1.5)]
+            
+            # Explicitly match column lengths to prevent index out of bounds
+            otbl = doc.add_table(rows=len(oems) + 1, cols=8)
             otbl.style = 'Table Grid'
-            owidths = [Inches(1.5), Inches(1.0), Inches(1.4), Inches(0.9), Inches(1.7)]
-            for ri, row_data in enumerate(oem_rows):
+            
+            # Write Header Row
+            hrow = otbl.rows[0]
+            for ci, (hdr_text, width) in enumerate(zip(oem_headers, owidths)):
+                hrow.cells[ci].width = width
+                add_cell_text(hrow.cells[ci], hdr_text, bold=True, size=9, color=RGBColor(0xFF, 0xFF, 0xFF))
+                set_cell_bg(hrow.cells[ci], '1A6B3C')
+                
+            # Write Data Rows natively looping over data array
+            for ri, oem in enumerate(oems, 1):
                 row = otbl.rows[ri]
-                for ci, (val, w) in enumerate(zip(row_data, owidths)):
-                    row.cells[ci].width = w
-                    is_header = ri == 0
-                    add_cell_text(row.cells[ci], val, bold=is_header, size=9,
-                                  color=RGBColor(0xFF,0xFF,0xFF) if is_header else None)
-                    if is_header:
-                        set_cell_bg(row.cells[ci], '1A6B3C')
-                    else:
-                        set_cell_bg(row.cells[ci], 'F0F8F0' if ri%2==0 else 'FFFFFF')
+                vals = [
+                    str(oem.get('market_rank', '') or '—'),
+                    oem.get('company_name', '—'),
+                    oem.get('country', '—'),
+                    oem.get('role', '—'),
+                    oem.get('market_share', '—'),
+                    oem.get('market_share_pct', '—'),
+                    oem.get('market_share_source', '—'),
+                    oem.get('notes', '—')
+                ]
+                bg = 'F0F8F0' if ri % 2 == 0 else 'FFFFFF'
+                for ci, (val, width) in enumerate(zip(vals, owidths)):
+                    row.cells[ci].width = width
+                    add_cell_text(row.cells[ci], val, bold=(ci==1), size=9)
+                    set_cell_bg(row.cells[ci], bg)
             doc.add_paragraph()
 
         # ── Executive Summary ──
         if summary:
-            doc.add_heading('2. Executive Summary', level=1)
+            doc.add_heading('3. Executive Summary', level=1)
             p = doc.add_paragraph(summary)
             p.runs[0].font.size = Pt(11)
             doc.add_paragraph()
 
         # ── Supplier Tiers ──
-        doc.add_heading('3. Supplier Tiers', level=1)
-        tier_names = ['Tier 1','Tier 2','Tier 3','Tier 4']
+        doc.add_heading('4. Supplier Tiers', level=1)
+        tier_names = ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4']
 
         for ti, (tier_key, suppliers) in enumerate(tiers.items()):
-            color     = TIER_COLORS[ti] if ti < len(TIER_COLORS) else RGBColor(0x80,0x80,0x80)
+            color     = TIER_COLORS[ti] if ti < len(TIER_COLORS) else RGBColor(0x80, 0x80, 0x80)
             hex_color = TIER_HEX[ti]    if ti < len(TIER_HEX)    else '808080'
             tname     = tier_names[ti]  if ti < len(tier_names)  else f'Tier {ti+1}'
 
@@ -2622,7 +1847,7 @@ def export_docx():
                 doc.add_paragraph('No suppliers identified.')
                 continue
 
-            headers = ['Company','Country','Supplies To','Components Supplied','Confidence']
+            headers = ['Company', 'Country', 'Supplies To', 'Components Supplied', 'Confidence']
             tbl2 = doc.add_table(rows=len(suppliers)+1, cols=5)
             tbl2.style = 'Table Grid'
             widths = [Inches(1.6), Inches(1.0), Inches(1.4), Inches(1.9), Inches(0.7)]
@@ -2631,19 +1856,18 @@ def export_docx():
             hrow = tbl2.rows[0]
             for ci, (hdr, w) in enumerate(zip(headers, widths)):
                 hrow.cells[ci].width = w
-                add_cell_text(hrow.cells[ci], hdr, bold=True, size=9,
-                              color=RGBColor(0xFF,0xFF,0xFF))
+                add_cell_text(hrow.cells[ci], hdr, bold=True, size=9, color=RGBColor(0xFF, 0xFF, 0xFF))
                 set_cell_bg(hrow.cells[ci], hex_color)
 
             # Data rows
             for ri, s in enumerate(suppliers):
                 drow = tbl2.rows[ri+1]
                 vals = [
-                    s.get('company_name',''),
-                    s.get('country',''),
-                    s.get('supplies_to',''),
+                    s.get('company_name', '—'),
+                    s.get('country', '—'),
+                    s.get('supplies_to', '—'),
                     ', '.join((s.get('components_supplied') or [])[:3]),
-                    s.get('confidence',''),
+                    s.get('confidence', '—'),
                 ]
                 bg = 'F8F9FA' if ri % 2 == 0 else 'FFFFFF'
                 for ci, (val, w) in enumerate(zip(vals, widths)):
@@ -2653,15 +1877,14 @@ def export_docx():
             doc.add_paragraph()
 
         # ── Statistics ──
-        doc.add_heading('4. Statistics', level=1)
+        doc.add_heading('5. Statistics', level=1)
         total     = sum(len(v) for v in tiers.values())
-        countries = len(set(s.get('country','') for arr in tiers.values()
-                            for s in arr if s.get('country')))
+        countries = len(set(s.get('country', '') for arr in tiers.values() for s in arr if s.get('country')))
         stats = [
             ('Total Suppliers Identified', str(total)),
             ('Countries Represented',      str(countries)),
             ('Tier Depth Mapped',          str(len(tiers))),
-            ('Industry',                   product.get('industry','—')),
+            ('Industry',                   product.get('industry', '—')),
         ]
         stbl = doc.add_table(rows=len(stats), cols=2)
         stbl.style = 'Table Grid'
@@ -2689,9 +1912,6 @@ def export_docx():
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-        return jsonify({"error": str(e)}), 500
-
 
 @app.route("/api/export/pdf", methods=["POST"])
 def export_pdf():

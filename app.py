@@ -1063,10 +1063,10 @@ def write_index_sheet(ws, results: list[dict], run_meta: dict):
 def write_oem_sheet(ws, results: list[dict]):
     """
     One consolidated OEM sheet across all products.
-    Columns: Product | Company | Country | Role | Market Share | Confidence | Notes
+    Columns: Product | Company | Country | Role | Market Share | Market Share % | Market Share Source | Market Rank | Confidence | Notes | AI Provider | Flagged
     """
-    headers = ["Product", "Company Name", "Country", "Role", "Market Share", "Confidence", "Notes", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URLs", "Verification Layer", "Flagged"]
-    col_widths = [28, 26, 14, 22, 12, 11, 35, 14, 10, 14, 40, 50, 8, 10]
+    headers = ["Product", "Company Name", "Country", "Role", "Market Share", "Market Share %", "Market Share Source", "Market Rank", "Confidence", "Notes", "AI Provider", "Flagged"]
+    col_widths = [28, 26, 14, 22, 12, 14, 28, 12, 11, 35, 14, 10]
     set_col_widths(ws, col_widths)
 
     for ci, h in enumerate(headers, 1):
@@ -1079,23 +1079,21 @@ def write_oem_sheet(ws, results: list[dict]):
             product_name = prov_sc.get("product", {}).get("product_name", r["product_input"])
             for oem in prov_sc.get("oems", []):
                 fill = _row_fill(row)
-                data_cell(ws, row, 1, product_name, bold=True, fill=fill)
-                data_cell(ws, row, 2, oem.get("company_name", ""), fill=fill)
-                data_cell(ws, row, 3, oem.get("country", ""), fill=fill)
-                data_cell(ws, row, 4, oem.get("role", ""), fill=fill)
-                data_cell(ws, row, 5, oem.get("market_share", ""), fill=fill)
-                data_cell(ws, row, 6, oem.get("confidence", ""), fill=fill)
-                data_cell(ws, row, 7, oem.get("notes", ""), fill=fill)
-                data_cell(ws, row, 8, prov_id, fill=fill)
-                v = oem.get("_verification", {})
-                data_cell(ws, row, 9,  str(v.get("verified", "—")), fill=fill)
-                data_cell(ws, row, 10, v.get("confidence", "—"), fill=fill)
-                data_cell(ws, row, 11, v.get("reason", "—"), fill=fill)
-                data_cell(ws, row, 12, ", ".join(v.get("source_urls", [])), fill=fill)
-                data_cell(ws, row, 13, str(v.get("layer", "—")), fill=fill)
-                data_cell(ws, row, 14, str(oem.get("flagged", False)), fill=fill)
+                rank = oem.get("market_rank", "")
+                data_cell(ws, row, 1,  product_name, bold=True, fill=fill)
+                data_cell(ws, row, 2,  oem.get("company_name", ""), fill=fill)
+                data_cell(ws, row, 3,  oem.get("country", ""), fill=fill)
+                data_cell(ws, row, 4,  oem.get("role", ""), fill=fill)
+                data_cell(ws, row, 5,  oem.get("market_share", ""), fill=fill)
+                data_cell(ws, row, 6,  oem.get("market_share_pct", ""), fill=fill)
+                data_cell(ws, row, 7,  oem.get("market_share_source", ""), fill=fill)
+                data_cell(ws, row, 8,  "" if rank == 99 else rank, fill=fill)
+                data_cell(ws, row, 9,  oem.get("confidence", ""), fill=fill)
+                data_cell(ws, row, 10, oem.get("notes", ""), fill=fill)
+                data_cell(ws, row, 11, prov_id, fill=fill)
+                data_cell(ws, row, 12, str(oem.get("flagged", False)), fill=fill)
                 row += 1
-    
+
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row - 1}"
 

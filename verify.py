@@ -21,6 +21,13 @@ from urllib.parse import quote_plus
 import openpyxl
 from flask import Blueprint, Response, jsonify, request, send_file
 from openpyxl.styles import Font, PatternFill
+from selenium import webdriver
+from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
 # ── Import shared helpers from app.py ─────────────────────────────────────────
 # These are imported at call-time (inside functions) to avoid circular imports
@@ -33,81 +40,84 @@ _verify_queues: dict = {}
 _verify_queues_lock = threading.Lock()
 
 
-# ── Playwright web search ────────────────────────────────────────────────────
+# ── Selenium + Edge web search ───────────────────────────────────────────────
 
-def playwright_search(query: str, n: int = 4) -> list[dict]:
+def playwright_search(query: str, n: int = 4, log_fn=None) -> list[dict]:
     """
-    Search Bing headlessly via Playwright and scrape the top n article pages.
+    Search Bing headlessly via Selenium + system Edge and scrape the top n article pages.
     Returns a list of {"url": str, "content": str} dicts.
     Falls back to [] on any failure so callers degrade gracefully.
+    log_fn(msg, is_error): optional callback to push log lines to the SSE queue.
     """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        print("[playwright_search] playwright not installed — run: pip install playwright && playwright install chromium")
-        return []
+    def _log(msg, is_error=False):
+        print(msg)
+        if log_fn:
+            log_fn(msg, is_error)
 
     results = []
     search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
-
-    # Domains to skip — Bing UI links, ads, Microsoft pages
     SKIP_DOMAINS = ("bing.com", "microsoft.com", "msn.com", "go.microsoft.com")
 
+    driver = None
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                )
+        options = EdgeOptions()
+        options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
+        )
+
+        service = EdgeService(EdgeChromiumDriverManager().install())
+        driver = webdriver.Edge(service=service, options=options)
+        driver.set_page_load_timeout(15)
+
+        # ── Step 1: fetch Bing search results page ────────────────────────
+        driver.get(search_url)
+        try:
+            WebDriverWait(driver, 8).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "#b_results"))
             )
+        except Exception as e:
+            _log(f"[selenium] Bing results page failed for query '{query}': {e}", is_error=True)
+            return []
 
-            # ── Step 1: fetch Bing search results page ────────────────────
-            page = context.new_page()
+        anchors = driver.find_elements(By.CSS_SELECTOR, "#b_results h2 a")
+        urls = []
+        for a in anchors:
+            href = a.get_attribute("href") or ""
+            if href.startswith("http") and not any(d in href for d in SKIP_DOMAINS):
+                urls.append(href)
+            if len(urls) >= n:
+                break
+
+        # ── Step 2: scrape each article page ─────────────────────────────
+        for url in urls:
             try:
-                page.goto(search_url, timeout=15000)
-                page.wait_for_selector("#b_results", timeout=8000)
+                driver.get(url)
+                WebDriverWait(driver, 8).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                text = driver.find_element(By.TAG_NAME, "body").text
+                text = " ".join(text.split())[:2000]
+                results.append({"url": url, "content": text})
+                _log(f"[selenium] Scraped: {url}")
             except Exception as e:
-                print(f"[playwright_search] Bing results page failed: {e}")
-                browser.close()
-                return []
+                _log(f"[selenium] Failed to scrape {url}: {e}", is_error=True)
 
-            # Extract result URLs from <h2><a> inside #b_results
-            anchors = page.query_selector_all("#b_results h2 a")
-            urls = []
-            for a in anchors:
-                href = a.get_attribute("href") or ""
-                if href.startswith("http") and not any(d in href for d in SKIP_DOMAINS):
-                    urls.append(href)
-                if len(urls) >= n:
-                    break
-            page.close()
-
-            # ── Step 2: scrape each article page ─────────────────────────
-            for url in urls:
-                try:
-                    article_page = context.new_page()
-                    article_page.goto(url, timeout=15000, wait_until="domcontentloaded")
-                    article_page.wait_for_selector("body", timeout=5000)
-                    # inner_text strips HTML tags and returns visible text
-                    text = article_page.inner_text("body")
-                    # Collapse whitespace and truncate
-                    text = " ".join(text.split())[:2000]
-                    results.append({"url": url, "content": text})
-                    article_page.close()
-                except Exception as e:
-                    print(f"[playwright_search] Failed to scrape {url}: {e}")
-                    try:
-                        article_page.close()
-                    except Exception:
-                        pass
-
-            browser.close()
+        _log(f"[selenium] Completed webcrawl for '{query}' — {len(results)} page(s) scraped")
 
     except Exception as e:
-        print(f"[playwright_search] Unexpected error: {e}")
+        _log(f"[selenium] Unexpected error for query '{query}': {e}", is_error=True)
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     return results
 
@@ -150,7 +160,7 @@ If the evidence does not clearly confirm, set answer to false."""
     return {"answer": False, "notes": "LLM call failed"}
 
 
-def verify_supplier_row(company_name: str, supplies_to: str, components: str, provider: str) -> dict:
+def verify_supplier_row(company_name: str, supplies_to: str, components: str, provider: str, log_fn=None) -> dict:
     """
     Run three web-search + LLM checks for one supplier row.
 
@@ -174,7 +184,7 @@ def verify_supplier_row(company_name: str, supplies_to: str, components: str, pr
         )
 
     # ── Step 1: Company Exists ────────────────────────────────────────────────
-    results1 = playwright_search(f'"{company_name}" manufacturer supplier', n=3)
+    results1 = playwright_search(f'"{company_name}" manufacturer supplier', n=3, log_fn=log_fn)
     result1 = _ai_judge(
         _build_evidence(results1),
         f'Does "{company_name}" exist as a real company that manufactures or supplies industrial/commercial products?',
@@ -187,7 +197,7 @@ def verify_supplier_row(company_name: str, supplies_to: str, components: str, pr
         all_urls.extend(r["url"] for r in results1)
 
     # ── Step 2: Supply Ties ───────────────────────────────────────────────────
-    results2 = playwright_search(f'"{company_name}" "{supplies_to}" supplier', n=4)
+    results2 = playwright_search(f'"{company_name}" "{supplies_to}" supplier', n=4, log_fn=log_fn)
     result2 = _ai_judge(
         _build_evidence(results2),
         f'Does the evidence confirm a direct supply relationship where "{company_name}" supplies "{supplies_to}"?',
@@ -201,7 +211,7 @@ def verify_supplier_row(company_name: str, supplies_to: str, components: str, pr
 
     # ── Step 3: Correct Component Supplied ────────────────────────────────────
     component_query = components[:120] if components else "components"
-    results3 = playwright_search(f'"{company_name}" manufactures "{component_query}"', n=4)
+    results3 = playwright_search(f'"{company_name}" manufactures "{component_query}"', n=4, log_fn=log_fn)
     result3 = _ai_judge(
         _build_evidence(results3),
         f'Does the evidence confirm that "{company_name}" manufactures or produces "{component_query}"?',
@@ -281,7 +291,11 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
                     total_rows += 1
 
     push({"type": "start", "total": total_rows})
+    push({"type": "timer_start"})
     processed = 0
+
+    def log_fn(msg, is_error=False):
+        push({"type": "log", "message": msg, "is_error": is_error})
 
     for ws in tier_sheets:
         col_company   = _find_col(ws, "Company Name")
@@ -325,6 +339,7 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
                 supplies_to=str(supplies_to or ""),
                 components=str(components or ""),
                 provider=provider,
+                log_fn=log_fn,
             )
 
             # Write the 5 columns
@@ -374,6 +389,7 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
         with _export_files_lock:
             _export_files[file_id] = {"path": tmp_path, "filename": out_filename}
 
+        push({"type": "timer_stop"})
         push({"type": "file_ready", "file_id": file_id, "filename": out_filename})
 
     except Exception as e:
@@ -397,11 +413,15 @@ def verify_page():
     input[type=file] { margin: 1rem 0; display: block; color: #eee; }
     button { background: #333; color: #eee; border: 1px solid #555; padding: .5rem 1.5rem; cursor: pointer; font-family: monospace; }
     button:hover { background: #444; }
-    #log div { margin: 2px 0; }
-    .done  { color: #4caf50; }
-    .error { color: #f44336; }
+    #log div { margin: 2px 0; font-size: .85rem; line-height: 1.6; }
+    .done    { color: #4caf50; }
+    .error   { color: #f44336; }
+    .log-line { color: #888; font-size: .78rem; }
+    .log-err  { color: #e57373; font-size: .78rem; }
     select { background: #222; color: #eee; border: 1px solid #555; padding: .3rem; font-family: monospace; margin-bottom: 1rem; }
     label  { font-size: .9rem; color: #aaa; }
+    #timer { display: none; font-size: .85rem; color: #e8ff47; margin-top: .75rem; letter-spacing: .05em; }
+    #timer span { font-weight: bold; }
   </style>
 </head>
 <body>
@@ -418,6 +438,7 @@ def verify_page():
   <input type="file" id="fileInput" accept=".xlsx">
   <button onclick="startVerification()">Upload &amp; Verify</button>
 
+  <div id="timer">⏱ Elapsed: <span id="timerVal">0.0s</span></div>
   <div id="log" style="margin-top:1.5rem"></div>
 
   <script>
@@ -429,6 +450,28 @@ def verify_page():
       log.appendChild(d);
       d.scrollIntoView();
     };
+
+    let timerInterval = null;
+    let timerStart = null;
+
+    function startTimer() {
+      timerStart = Date.now();
+      const disp = document.getElementById('timer');
+      const val  = document.getElementById('timerVal');
+      disp.style.display = 'block';
+      val.textContent = '0.0s';
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        val.textContent = ((Date.now() - timerStart) / 1000).toFixed(1) + 's';
+      }, 100);
+    }
+
+    function stopTimer() {
+      if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+      if (!timerStart) return;
+      const elapsed = ((Date.now() - timerStart) / 1000).toFixed(1);
+      document.getElementById('timerVal').textContent = elapsed + 's ✓';
+    }
 
     async function startVerification() {
       const file = document.getElementById('fileInput').files[0];
@@ -456,12 +499,18 @@ def verify_page():
 
       evtSource.onmessage = (e) => {
         const msg = JSON.parse(e.data);
-        if (msg.type === 'start') {
+        if (msg.type === 'timer_start') {
+          startTimer();
+        } else if (msg.type === 'timer_stop') {
+          stopTimer();
+        } else if (msg.type === 'start') {
           append(`Processing ${msg.total} supplier row(s)…`);
         } else if (msg.type === 'progress') {
           append(msg.message);
         } else if (msg.type === 'status') {
           append(msg.message);
+        } else if (msg.type === 'log') {
+          append(msg.message, msg.is_error ? 'log-err' : 'log-line');
         } else if (msg.type === 'file_ready') {
           append(`✓ Done — downloading ${msg.filename}`, 'done');
           const a = document.createElement('a');
@@ -472,6 +521,7 @@ def verify_page():
           document.body.removeChild(a);
           evtSource.close();
         } else if (msg.type === 'error') {
+          stopTimer();
           append('Error: ' + msg.message, 'error');
           evtSource.close();
         } else if (msg.type === 'done') {
@@ -480,6 +530,7 @@ def verify_page():
       };
 
       evtSource.onerror = () => {
+        stopTimer();
         append('Connection lost.', 'error');
         evtSource.close();
       };

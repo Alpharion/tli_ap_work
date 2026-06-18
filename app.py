@@ -29,6 +29,9 @@ import tempfile
 app = Flask(__name__)
 CORS(app)
 
+from verify import verify_bp
+app.register_blueprint(verify_bp)
+
 # ── Country coords ────────────────────────────────────────────────────────────
 COUNTRY_COORDS = {
     "united states":(37.09,-95.71),"usa":(37.09,-95.71),"us":(37.09,-95.71),

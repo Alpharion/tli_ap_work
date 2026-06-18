@@ -26,7 +26,8 @@ duckduckgo_search
 openpyxl
 
 # ── Headless browser (verify.py) ─────────────────────────────
-playwright
+selenium>=4.0.0
+webdriver-manager>=4.0.0
 
 # ── dotenv ─────────────────────────────
 dotenv

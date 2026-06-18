@@ -95,7 +95,6 @@ YET TO BE DONE
 
 "Lithium ion battery 4680 cylindrical",
 "Lithium ion battery 21700 cylindrical",
-"Lithium ion battery 4680 cylindrical",
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
@@ -112,6 +111,8 @@ YET TO BE DONE
 
 NEED TO DO POLYMER PRINTER AGN
 """
+
+
 
 PRODUCTS_TO_TEST = [
 "High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",

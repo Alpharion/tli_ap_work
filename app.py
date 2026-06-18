@@ -1104,13 +1104,18 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
     One sheet per tier, all products combined.
     Columns: Product | Company | Country | Supplies To | OEM Root | Components | Confidence | Source
     """
-    headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Verified", "Verification Confidence", "Verification Reason", "Source URLs", "Verification Layer", "Flagged"]
-    col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 14, 40, 50, 8, 10]
+    base_headers = ["Product", "Company Name", "Country", "Supplies To", "OEM Root", "Components Supplied", "Confidence", "Source Hint", "AI Provider", "Flagged"]
+    verify_headers = ["Verification Notes", "Company Exists", "Supply Ties Exist", "Correct Component Supplied", "URL"]
+    headers = base_headers + verify_headers
+    col_widths = [28, 26, 14, 22, 20, 32, 11, 35, 14, 10, 40, 14, 14, 14, 50]
     set_col_widths(ws, col_widths)
 
     hdr_fill = HDR_TIER[tier_num-1] if tier_num - 1 < len(HDR_TIER) else _fill("37474F")
-    for ci, h in enumerate(headers, 1):
+    verify_fill = _fill("E65100")
+    for ci, h in enumerate(base_headers, 1):
         hdr_cell(ws, 1, ci, h, hdr_fill)
+    for ci, h in enumerate(verify_headers, len(base_headers) + 1):
+        hdr_cell(ws, 1, ci, h, verify_fill)
     ws.row_dimensions[1].height = 24
 
     row = 2
@@ -1130,15 +1135,10 @@ def write_tier_sheet(ws, results: list[dict], tier_key: str, tier_num: int):
                 data_cell(ws, row, 7, s.get("confidence", ""), fill=fill)
                 data_cell(ws, row, 8, s.get("source_hint", ""), fill=fill)
                 data_cell(ws, row, 9, prov_id, fill=fill)
-                v = s.get("_verification", {})
-                data_cell(ws, row, 10, str(v.get("verified", "—")), fill=fill)
-                data_cell(ws, row, 11, v.get("confidence", "—"), fill=fill)
-                data_cell(ws, row, 12, v.get("reason", "—"), fill=fill)
-                data_cell(ws, row, 13, ", ".join(v.get("source_urls", [])), fill=fill)
-                data_cell(ws, row, 14, str(v.get("layer", "—")), fill=fill)
-                data_cell(ws, row, 15, str(s.get("flagged", False)), fill=fill)
+                data_cell(ws, row, 10, str(s.get("flagged", False)), fill=fill)
+                # cols 11-15: verification columns left empty (to be filled by verify layer)
                 row += 1
-    
+
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row-1}"
 
@@ -1182,8 +1182,8 @@ def write_product_sheet(ws, result: dict):
 
     current_row = len(overview_fields) + 5
 
-    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint"]
-    tier_widths  = [28, 14, 22, 20, 32, 11, 35]
+    tier_headers = ["Company Name", "Country", "Supplies To", "OEM Root", "Components", "Confidence", "Source Hint", "Source URL"]
+    tier_widths  = [28, 14, 22, 20, 32, 11, 35, 50]
 
     # ── One section per provider ──────────────────────────────────────────────
     for prov_id, sc in provider_results.items():
@@ -1192,7 +1192,7 @@ def write_product_sheet(ws, result: dict):
         prov_heading = ws.cell(row=current_row, column=1, value=f"Provider: {prov_id.upper()}")
         prov_heading.font = Font(name=FONT, bold=True, size=12, color="FFFFFF")
         prov_heading.fill = _fill("37474F")
-        ws.merge_cells(f"A{current_row}:G{current_row}")
+        ws.merge_cells(f"A{current_row}:H{current_row}")
         ws.row_dimensions[current_row].height = 22
         current_row += 1
 
@@ -1200,7 +1200,7 @@ def write_product_sheet(ws, result: dict):
         summary_cell = ws.cell(row=current_row, column=1, value=sc.get("summary", "No summary generated."))
         summary_cell.font = _font()
         summary_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-        ws.merge_cells(f"A{current_row}:G{current_row}")
+        ws.merge_cells(f"A{current_row}:H{current_row}")
         ws.row_dimensions[current_row].height = 50
         current_row += 2
 
@@ -1219,7 +1219,7 @@ def write_product_sheet(ws, result: dict):
                                value=f"{tier_label} ({len(suppliers)} suppliers)")
             heading.font = Font(name=FONT, bold=True, size=11, color="FFFFFF")
             heading.fill = hdr_fill
-            ws.merge_cells(f"A{current_row}:G{current_row}")
+            ws.merge_cells(f"A{current_row}:H{current_row}")
             ws.row_dimensions[current_row].height = 22
             current_row += 1
 
@@ -1243,6 +1243,7 @@ def write_product_sheet(ws, result: dict):
                 data_cell(ws, current_row, 5, ", ".join(s.get("components_supplied") or []), fill=fill)
                 data_cell(ws, current_row, 6, s.get("confidence", ""),    fill=fill)
                 data_cell(ws, current_row, 7, s.get("source_hint", ""),   fill=fill)
+                data_cell(ws, current_row, 8, s.get("source_url", ""),    fill=fill)
                 ws.row_dimensions[current_row].height = 60
                 current_row += 1
 

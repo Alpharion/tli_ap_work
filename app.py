@@ -1700,6 +1700,28 @@ def find_node():
     return None
 
 
+@app.route("/api/export/excel", methods=["POST"])
+def export_excel():
+    try:
+        data = request.get_json(force=True)
+        supply_chain = data.get("supply_chain", {})
+        product_input = data.get("product_input", supply_chain.get("product", {}).get("product_name", "export"))
+        depth = int(data.get("depth", 3))
+
+        clean = re.sub(r'[\\/*?\[\]:]', '', product_input).strip()[:26]
+        sheet_prefix = f"1_{clean}"
+
+        results = [{"product_input": product_input, "supply_chain": supply_chain, "sheet_prefix": sheet_prefix}]
+
+        wb_bytes = build_bulk_workbook(results, supply_chain.get("provider", "Frontend Export"), depth)
+        buf = io.BytesIO(wb_bytes)
+        return send_file(buf, as_attachment=True,
+                         download_name=f"{clean}_supply_chain.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/export/docx", methods=["POST"])
 def export_docx():
     """Generate Word document using pure Python (python-docx). No Node.js needed."""

@@ -92,17 +92,30 @@ YET TO BE DONE
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
 
+
 "Lithium ion battery 4680 cylindrical",
 "Lithium ion battery 21700 cylindrical",
 "Lithium ion battery 4680 cylindrical",
 "Lithium polymer batter pouch cell",
 "Tank Ammunition 120mm",
 "Tank Ammunition 125mm",
+"Filament type raw material for printers (PLA, ABS PETG, PP etc) for printing drone (mini class, weight <=5, size <=450mm)",
+"Powder type raw materials for printers (stainless steel 216L, thermoplastic powders) for printing drone (mini class, weight <=5, size <=450mm)",
+"High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",
+"Propeller for drones (mini class, weight <=5, size <=450mm)",
+"DC Brushless Motor for drone (mini class, weight <=5, size <=450mm)",
+"Radio Receiver and Transmitter for drone (mini class, weight <=5, size <=450mm)",
+"Camera with Gimbal for drone (mini class, weight <=5, size <=450mm)",
+"Ground Controlling Unit for drone (mini class, weight <=5, size <=450mm)",
+"Battery Management System for drone (mini class, weight <=5, size <=450mm)",
+"Connectors and Cables for drone (mini class, weight <=5, size <=450mm)",
 
+NEED TO DO POLYMER PRINTER AGN
 """
 
 PRODUCTS_TO_TEST = [
-    "Tank Ammunition 120mm",
+"High performance polymer printer (example is HP Multi Jet Fusion Printer) for printing drone (mini class, weight <=5, size <=450mm)",
+"Structural Adhesives for drone (mini class, weight <=5, size <=450mm)", # left this one
 ]
 
 DEPTH    = 2      # supply chain depth per product (1–3)
@@ -377,20 +390,22 @@ def build_prompt_with_evidence(base_prompt: str, evidence: str) -> str:
 
 
 # ── Provider status ───────────────────────────────────────────────────────────
-
-def available_providers() -> list[dict]:
-    return [
-        {"id":"anthropic","name":"Anthropic Claude","model":"claude-sonnet-4-6",
-         "env":"ANTHROPIC_API_KEY","configured":bool(os.getenv("ANTHROPIC_API_KEY")),
-         "search":"DuckDuckGo"},
-        {"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4.1-mini",
-         "env":"OPENAI_API_KEY","configured":bool(os.getenv("OPENAI_API_KEY")),
-         "search":"DuckDuckGo"},
+"""
+{"id":"openai","name":"OpenAI GPT-4o-mini","model":"gpt-4.1-mini",
+    "env":"OPENAI_API_KEY","configured":bool(os.getenv("OPENAI_API_KEY")),
+    "search":"DuckDuckGo"},
         {"id":"gemini","name":"Google Gemini","model":"gemini-2.5-flash",
          "env":"GEMINI_API_KEY","configured":bool(os.getenv("GEMINI_API_KEY")),
          "search":"Google Search (built-in)"},
         {"id":"deepseek","name":"DeepSeek V3","model":"deepseek-chat",
          "env":"DEEPSEEK_API_KEY","configured":bool(os.getenv("DEEPSEEK_API_KEY")),
+         "search":"DuckDuckGo"},
+"""
+
+def available_providers() -> list[dict]:
+    return [
+        {"id":"anthropic","name":"Anthropic Claude","model":"claude-sonnet-4-6",
+         "env":"ANTHROPIC_API_KEY","configured":bool(os.getenv("ANTHROPIC_API_KEY")),
          "search":"DuckDuckGo"},
     ]
 
@@ -660,7 +675,7 @@ List 2-8 significant OEMs as SEPARATE array elements."""
             tier_prompt = f"""You are a supply chain research assistant.
 Product: {product_info.get('product_name')} ({product_info.get('industry')})
 OEM root: {oem_root}
-Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components involved in the manufacturing of {product_info.get('product_name')} to: {parent}
+Finding Tier-{tier_num} suppliers — companies that DIRECTLY supply components that are part of the manufacturing chain for {product_info.get('product_name')} to: {parent}
 
 {evidence_note}
 STRICT INCLUSION RULES — a supplier must meet ALL of the following:

@@ -745,10 +745,13 @@ function updateStats(sc) {
   let total=0, countries=new Set();
   Object.values(sc.tiers||{}).forEach(arr=>arr.forEach(s=>{total++;if(s.country)countries.add(s.country);}));
   document.getElementById('mapStats').innerHTML=`
+    <div class="stat"><strong>${sc.product.product_name}</strong>Product Name</div>
     <div class="stat"><strong>${total}</strong>Total Suppliers</div>
     <div class="stat"><strong>${countries.size}</strong>Countries</div>
     <div class="stat"><strong>${Object.keys(sc.tiers||{}).length}</strong>Tier Depth</div>
-    <div class="stat"><strong>${Object.keys(nodeReg).length}</strong>Mapped Nodes</div>`;
+    <div class="stat"><strong>${Object.keys(nodeReg).length}</strong>Mapped Nodes</div>
+    <div class="stat"><strong>${new Date().toLocaleDateString()}</strong>Date</div>
+    <div class="stat"><strong>${new Date().toLocaleTimeString()}</strong>Time</div>`;
 }
 
 // ── reset ─────────────────────────────────────────────────────────────────────

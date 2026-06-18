@@ -27,3 +27,6 @@ openpyxl
 
 # ── Headless browser (verify.py) ─────────────────────────────
 playwright
+
+# ── dotenv ─────────────────────────────
+dotenv

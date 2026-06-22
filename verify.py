@@ -13,39 +13,21 @@ Registered in app.py via:
 import io
 import json
 import os
-import random
 import tempfile
 import threading
 import time
 import uuid
-from urllib.parse import quote_plus
 
 import openpyxl
 from flask import Blueprint, Response, jsonify, request, send_file
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright_stealth import Stealth
+from ai import call_ai, safe_parse_json
+from scraper import web_search
 
-# ── Import shared helpers from app.py ─────────────────────────────────────────
-# These are imported at call-time (inside functions) to avoid circular imports
-# since app.py imports nothing from verify.py at module level.
+# ── _export_files is imported from app at call-time to avoid circular imports ─
 
 verify_bp = Blueprint("verify", __name__)
-
-_JUNK_DOMAINS = {
-    "youtube.com", "facebook.com", "twitter.com", "x.com",
-    "instagram.com", "tiktok.com", "pinterest.com",
-    "reddit.com", "quora.com",
-}
-
-def _is_junk_domain(url: str) -> bool:
-    from urllib.parse import urlparse
-    try:
-        host = urlparse(url).netloc.lower().removeprefix("www.")
-        return any(host == d or host.endswith("." + d) for d in _JUNK_DOMAINS)
-    except Exception:
-        return False
 
 # ── Shared utilities ─────────────────────────────────────────────────────────
 
@@ -67,15 +49,19 @@ def _build_evidence(results: list[dict]) -> str:
 
 def _call_ai_json(prompt: str, provider: str, max_tokens: int,
                   required_key: str, log) -> dict | None:
-    """Call the LLM, parse JSON, and return the dict if required_key is present. Returns None on failure."""
-    from app import call_ai, safe_parse_json
-    try:
-        raw = call_ai(prompt, provider, max_tokens=max_tokens)
-        parsed = safe_parse_json(raw)
-        if isinstance(parsed, dict) and required_key in parsed:
-            return parsed
-    except Exception as e:
-        log(f"[llm] Call failed: {e}", True)
+    """Call the LLM with up to 3 attempts, returning the parsed dict if required_key is present."""
+    for attempt in range(1, 4):
+        try:
+            raw = call_ai(prompt, provider, max_tokens=max_tokens)
+            parsed = safe_parse_json(raw)
+            if isinstance(parsed, dict) and required_key in parsed:
+                return parsed
+            log(f"[llm] Attempt {attempt}: response missing '{required_key}' — retrying", True)
+        except Exception as e:
+            log(f"[llm] Attempt {attempt} failed: {e}", True)
+        if attempt < 3:
+            time.sleep(5 * attempt)  # 5s after attempt 1, 10s after attempt 2
+    log("[llm] All 3 attempts failed", True)
     return None
 
 
@@ -93,92 +79,6 @@ def _unique_urls(urls: list[str]) -> list[str]:
 # Per-run queues: stream_id -> list of SSE event dicts
 _verify_queues: dict = {}
 _verify_queues_lock = threading.Lock()
-
-
-# ── Selenium + Edge web search ───────────────────────────────────────────────
-
-def playwright_search(query: str, page, n: int = 4, log_fn=None, max_scrape: int | None = None) -> list[dict]:
-    """
-    Search Bing headlessly using a provided Playwright page object and scrape the top n article pages.
-    The caller is responsible for creating and closing the browser/context/page.
-    Returns a list of {"url": str, "content": str} dicts.
-    Falls back to [] on any failure so callers degrade gracefully.
-    log_fn(msg, is_error): optional callback to push log lines to the SSE queue.
-    """
-    _log = _make_logger(log_fn)
-    results = []
-    search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
-
-    # Reset to blank before each search to clear any in-flight navigation state
-    try:
-        page.goto("about:blank", timeout=3000, wait_until="domcontentloaded")
-    except Exception:
-        pass
-
-    try:
-        # ── Step 1: fetch Bing search results page ────────────────────────
-        try:
-            page.goto(search_url, timeout=20000, wait_until="domcontentloaded")
-            try:
-                page.wait_for_selector("#b_results", timeout=8000, state="attached")
-            except PlaywrightTimeoutError:
-                try:
-                    page.wait_for_selector(".b_algo", timeout=3000, state="attached")
-                    _log(f"[playwright] #b_results not found, fell back to .b_algo for '{query}'")
-                except PlaywrightTimeoutError:
-                    _log(f"[playwright] Bing results page failed for '{query}' — possible CAPTCHA or bot block", is_error=True)
-                    return []
-        except PlaywrightTimeoutError as e:
-            _log(f"[playwright] Bing navigation timed out for '{query}': {e}", is_error=True)
-            return []
-
-        anchors = page.query_selector_all("#b_results h2 a, .b_algo h2 a")
-        _log(f"[playwright] Raw anchors found: {len(anchors)}")
-
-        hrefs = []
-        for a in anchors:
-            href = a.get_attribute("href") or ""
-            if href.startswith("http"):
-                hrefs.append(href)
-            if len(hrefs) >= n:
-                break
-
-        _log(f"[playwright] hrefs collected: {len(hrefs)}")
-
-        # ── Step 2: scrape each article page ─────────────────────────────
-        scraped_count = 0
-        for href in hrefs:
-            if max_scrape is not None and scraped_count >= max_scrape:
-                break
-            try:
-                page.goto(href, timeout=15000, wait_until="domcontentloaded")
-                try:
-                    page.wait_for_url(lambda url: "bing.com" not in url, timeout=10000)
-                    page.wait_for_load_state("domcontentloaded", timeout=8000)
-                except PlaywrightTimeoutError:
-                    pass  # already on a non-Bing URL, or redirect never happened — proceed anyway
-                if _is_junk_domain(page.url):
-                    _log(f"[playwright] Skipping junk domain: {page.url}")
-                    continue
-                CONTENT_SELECTORS = ["article", "main", "[role='main']", "#content", "#main-content", "body"]
-                text = ""
-                for selector in CONTENT_SELECTORS:
-                    el = page.query_selector(selector)
-                    if el:
-                        text = el.inner_text()
-                        break
-                text = " ".join(text.split())[:2000]
-                results.append({"url": page.url, "content": text})
-                scraped_count += 1
-                _log(f"[playwright] Scraped: {page.url}")
-            except Exception as e:
-                _log(f"[playwright] Failed to scrape {href}: {e}", is_error=True)
-
-    except Exception as e:
-        _log(f"[playwright] Unexpected error for '{query}': {e}", is_error=True)
-
-    _log(f"[playwright] Completed webcrawl for '{query}' — {len(results)} page(s) scraped")
-    return results
 
 
 # ── LLM verification helper ───────────────────────────────────────────────────
@@ -268,37 +168,14 @@ def verify_supplier_row(company_name: str, supplies_to: str, components: str, pr
         "notes_exists": "Browser error", "notes_supply": "Browser error", "notes_component": "Browser error",
     }
 
-    # ── Launch one browser, reuse across Phase 1 searches + confirmation loop ─
-    try:
-        with Stealth().use_sync(sync_playwright()) as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                locale="en-US",
-            )
-            page = context.new_page()
+    # ── 3 broad searches via DDG + Crawl4AI ──────────────────────────────────
+    r1 = web_search(f'"{company_name}" supplier manufacturer', n=10, max_scrape=4, log_fn=log_fn)
+    r2 = web_search(f'"{company_name}" "{supplies_to}" supply partnership', n=10, max_scrape=4, log_fn=log_fn)
+    r3 = web_search(f'"{company_name}" "{component_query}" manufacture supply', n=10, max_scrape=4, log_fn=log_fn)
+    all_results = r1 + r2 + r3
 
-            # ── Phase 1: 3 broad searches ─────────────────────────────────────
-            r1 = playwright_search(f'"{company_name}" (supplier OR manufacturer)', page, n=10, log_fn=log_fn, max_scrape=4)
-            time.sleep(random.uniform(1, 3))
-            r2 = playwright_search(f'"{company_name}" "{supplies_to}" (supply OR partnership OR collaboration OR venture)', page, n=10, log_fn=log_fn, max_scrape=4)
-            time.sleep(random.uniform(1, 3))
-            r3 = playwright_search(f'"{company_name}" "{component_query}" (produce OR manufacture OR supply)', page, n=10, log_fn=log_fn, max_scrape=4)
-
-            all_results = r1 + r2 + r3
-
-            # ── Build combined evidence and run Phase 1 LLM call ─────────────
-            _log(f"[llm] Combined evidence: {len(all_results)} page(s) scraped across 3 queries")
-            verdict = _ai_judge_all(_build_evidence(all_results), company_name, supplies_to, component_query, provider, log_fn=log_fn)
-
-            browser.close()
-
-    except Exception as e:
-        _log(f"[playwright] Browser error for '{company_name}': {e}", is_error=True)
+    _log(f"[llm] Combined evidence: {len(all_results)} page(s) scraped across 3 queries")
+    verdict = _ai_judge_all(_build_evidence(all_results), company_name, supplies_to, component_query, provider, log_fn=log_fn)
 
     unique_urls = _unique_urls([r["url"] for r in all_results])
 

@@ -20,14 +20,13 @@ python-docx>=1.1.0
 python-dotenv>=1.0.0
 
 # ── DDG Search ────────────────────────────────────────────────────────────────────
-duckduckgo_search
+ddgs
 
 # ── Excel Export ────────────────────────────────────────────
 openpyxl
 
-# ── Headless browser (verify.py) ─────────────────────────────
-playwright>=1.40.0
-playwright-stealth>=2.0.0
+# ── Web scraping pipeline (scraper.py) ───────────────────────
+crawl4ai
 
 # ── dotenv ─────────────────────────────
 dotenv

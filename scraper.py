@@ -1,20 +1,35 @@
 """
 scraper.py — URL collection and content extraction pipeline
 
-Provides web_search(query, n, max_scrape, log_fn) → list[{"url": str, "content": str}]
-Used by verify.py to replace the Playwright + Bing scraping approach.
+Provides:
+  web_search(query, n, max_scrape, log_fn)        → uses DDG (primary)
+  serper_web_search(query, n, max_scrape, log_fn) → uses Serper.dev (swap-in)
 
-URL collection : DuckDuckGo (ddgs) — primary
-                 Serper.dev        — written but NOT wired up; swap into web_search if needed
-Content extract: Crawl4AI async crawler
+Both return [{"url": str, "content": str}, ...].
+
+To switch the agentic pipeline from DDG to Serper.dev, change the one import line
+in pipeline.py from `web_search` to `serper_web_search` — nothing else changes.
+
+Raises DDGRateLimitError if DuckDuckGo rate-limits the session so the caller can
+abort immediately rather than continuing with empty evidence.
 """
 
 import asyncio
 import os
 import threading
+import time
 
 
-# Limit concurrent DDG calls across all ThreadPoolExecutor workers to avoid rate limits
+# ── Custom exception ──────────────────────────────────────────────────────────
+
+class DDGRateLimitError(Exception):
+    """Raised when DuckDuckGo actively rate-limits the search session."""
+    pass
+
+
+# ── Concurrency guard ─────────────────────────────────────────────────────────
+
+# Limits concurrent DDG calls across all ThreadPoolExecutor workers
 _DDG_SEMAPHORE = threading.Semaphore(2)
 
 _JUNK_DOMAINS = {
@@ -46,10 +61,23 @@ def _make_logger(log_fn):
     return _log
 
 
+def _is_rate_limit_error(e: Exception) -> bool:
+    """Detect DDG rate limit from exception type name or message."""
+    name = type(e).__name__.lower()
+    msg  = str(e).lower()
+    return "ratelimit" in name or "ratelimit" in msg or "202" in msg or "rate limit" in msg
+
+
 # ── URL collection ────────────────────────────────────────────────────────────
 
 def ddg_search(query: str, n: int = 10, log_fn=None) -> list[str]:
-    """Return up to n direct destination URLs from DuckDuckGo. Returns [] on rate limit or error."""
+    """
+    Return up to n direct destination URLs from DuckDuckGo.
+
+    Raises DDGRateLimitError if DDG rate-limits the session.
+    Returns [] on other (non-rate-limit) errors.
+    Sleeps 1s after every successful call to reduce rate-limit risk.
+    """
     from ddgs import DDGS
     _log = _make_logger(log_fn)
     with _DDG_SEMAPHORE:
@@ -58,8 +86,12 @@ def ddg_search(query: str, n: int = 10, log_fn=None) -> list[str]:
                 results = list(ddgs.text(query, max_results=n))
             urls = [r["href"] for r in results if "href" in r]
             _log(f"[ddg] '{query}' → {len(urls)} URL(s)")
+            time.sleep(1)  # courtesy pause to reduce rate-limit risk
             return urls
         except Exception as e:
+            if _is_rate_limit_error(e):
+                _log(f"[ddg] Rate limit hit for '{query}': {e}", True)
+                raise DDGRateLimitError(f"DDG rate limit: {e}") from e
             _log(f"[ddg] Search failed for '{query}': {e}", True)
             return []
 
@@ -67,7 +99,6 @@ def ddg_search(query: str, n: int = 10, log_fn=None) -> list[str]:
 def serper_search(query: str, n: int = 10, log_fn=None) -> list[str]:
     """
     Return up to n direct URLs from Serper.dev Google Search.
-    NOT called by web_search — to switch from DDG, replace ddg_search with this in web_search.
     Requires SERPER_API_KEY in .env.
     """
     import requests
@@ -107,13 +138,15 @@ async def _crawl_async(urls: list[str], max_scrape: int, log_fn) -> list[dict]:
                 _log(f"[crawl] Skipping junk domain: {url}")
                 continue
             try:
-                result = await crawler.arun(url=url)
+                result = await asyncio.wait_for(crawler.arun(url=url), timeout=20)
                 if result.success and result.markdown:
                     content = " ".join(result.markdown.split())[:2000]
                     results.append({"url": url, "content": content})
                     _log(f"[crawl] Scraped: {url}")
                 else:
                     _log(f"[crawl] No content from: {url}")
+            except asyncio.TimeoutError:
+                _log(f"[crawl] Timed out (20s), skipping: {url}", True)
             except Exception as e:
                 _log(f"[crawl] Failed {url}: {e}", True)
     _log(f"[crawl] Completed — {len(results)} page(s) scraped")
@@ -125,13 +158,22 @@ def crawl_urls(urls: list[str], max_scrape: int = 4, log_fn=None) -> list[dict]:
     return asyncio.run(_crawl_async(urls, max_scrape, log_fn))
 
 
-# ── Combined entry point ──────────────────────────────────────────────────────
+# ── Combined entry points ─────────────────────────────────────────────────────
 
 def web_search(query: str, n: int = 10, max_scrape: int = 4, log_fn=None) -> list[dict]:
     """
-    Collect up to n URLs via DuckDuckGo, crawl up to max_scrape non-junk pages.
-    Returns [{"url": str, "content": str}, ...] — identical shape to old playwright_search.
-    To switch to Serper.dev: replace ddg_search(...) with serper_search(...) below.
+    DDG-backed search + crawl.
+    Propagates DDGRateLimitError — callers should catch it and abort.
     """
-    urls = ddg_search(query, n=n, log_fn=log_fn)
+    urls = ddg_search(query, n=n, log_fn=log_fn)  # raises DDGRateLimitError on rate limit
+    return crawl_urls(urls, max_scrape=max_scrape, log_fn=log_fn)
+
+
+def serper_web_search(query: str, n: int = 10, max_scrape: int = 4, log_fn=None) -> list[dict]:
+    """
+    Serper.dev-backed search + crawl. Drop-in replacement for web_search.
+    To switch the agentic pipeline: change `from scraper import web_search`
+    to `from scraper import serper_web_search as web_search` in pipeline.py.
+    """
+    urls = serper_search(query, n=n, log_fn=log_fn)
     return crawl_urls(urls, max_scrape=max_scrape, log_fn=log_fn)

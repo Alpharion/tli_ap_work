@@ -19,7 +19,8 @@ from flask_cors import CORS
 
 from ai import available_providers
 from excel_export import build_bulk_workbook
-from pipeline import run_pipeline
+from pipeline import run_pipeline, run_agentic_pipeline
+from insights import insights_bp
 from report_export import report_bp
 from verify import verify_bp
 
@@ -27,6 +28,7 @@ app = Flask(__name__)
 CORS(app)
 app.register_blueprint(verify_bp)
 app.register_blueprint(report_bp)
+app.register_blueprint(insights_bp)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -97,8 +99,11 @@ def map_suppliers():
     def generate():
         sent = 0
         while not done.is_set() or sent < len(queue):
-            while sent < len(queue):
-                yield sse(queue[sent]); sent += 1
+            if sent < len(queue):
+                while sent < len(queue):
+                    yield sse(queue[sent]); sent += 1
+            else:
+                yield ": keepalive\n\n"
             time.sleep(0.1)
         yield sse({"type": "stream_end"})
 
@@ -143,8 +148,43 @@ def map_all():
     def generate():
         sent = 0
         while not done.is_set() or sent < len(queue):
-            while sent < len(queue):
-                yield sse(queue[sent]); sent += 1
+            if sent < len(queue):
+                while sent < len(queue):
+                    yield sse(queue[sent]); sent += 1
+            else:
+                yield ": keepalive\n\n"
+            time.sleep(0.1)
+        yield sse({"type": "stream_end"})
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/map_agentic")
+def map_agentic():
+    product = request.args.get("product", "").strip()
+    depth   = max(0, min(int(request.args.get("depth", 2)), 3))
+
+    if not product:
+        return jsonify({"error": "product required"}), 400
+
+    queue, done = [], threading.Event()
+
+    def run():
+        try: run_agentic_pipeline(product, depth, queue, [], {})
+        except Exception as e: queue.append({"type": "error", "message": str(e)})
+        finally: done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def generate():
+        sent = 0
+        while not done.is_set() or sent < len(queue):
+            if sent < len(queue):
+                while sent < len(queue):
+                    yield sse(queue[sent]); sent += 1
+            else:
+                yield ": keepalive\n\n"
             time.sleep(0.1)
         yield sse({"type": "stream_end"})
 

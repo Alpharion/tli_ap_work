@@ -51,6 +51,9 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .btn-map{background:var(--accent1);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
 .btn-map:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(232,255,71,.3)}
 .btn-map:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-agentic{background:var(--accent2);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
+.btn-agentic:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(71,200,255,.3)}
+.btn-agentic:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
 
 /* log */
 .status-log{background:var(--bg1);border:1px solid var(--border);border-radius:3px;padding:14px;margin-top:18px;max-height:130px;overflow-y:auto;display:none}
@@ -257,6 +260,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
         </select>
       </div>
       <button class="btn-map" id="mapBtn" onclick="startMapping()">▶ MAP CHAIN</button>
+      <button class="btn-agentic" id="agenticBtn" onclick="startAgenticMapping()">⚡ MAP AGENTIC</button>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px">
     <div id="providerStatus" style="display:flex;gap:10px;flex-wrap:wrap"></div>
@@ -1407,6 +1411,7 @@ function startMapping() {
   reset();
   const btn=document.getElementById('mapBtn');
   btn.disabled=true; btn.innerHTML='<span class="spinner"></span>MAPPING…';
+  document.getElementById('agenticBtn').disabled=true;
   // declare provider FIRST before any usage
   const provider=document.getElementById('providerSelect').value;
   const isAll = provider === "all";
@@ -1488,10 +1493,74 @@ function startMapping() {
   const done = () => {
     btn.disabled=false;
     btn.innerHTML='▶ MAP CHAIN';
+    document.getElementById('agenticBtn').disabled=false;
     if(evtSrc){evtSrc.close();evtSrc=null;}
     stopTimer();
     const _p = document.getElementById('providerSelect').value;
     if (_p && _p !== 'all') setProviderStatus(_p, 'done');
+  };
+}
+
+function startAgenticMapping() {
+  const product = document.getElementById('productInput').value.trim();
+  const depth   = parseInt(document.getElementById('depthSelect').value);
+  if (!product) { document.getElementById('productInput').focus(); return; }
+  if (evtSrc) { evtSrc.close(); evtSrc = null; }
+  reset();
+  const btn    = document.getElementById('agenticBtn');
+  const mapBtn = document.getElementById('mapBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>MAPPING…';
+  mapBtn.disabled = true;
+  appendLog(`⚡ Agentic Mapping: "${product}" (depth: ${depth}) — Gemini (non-China) + DeepSeek (China)`);
+  startTimer();
+  evtSrc = new EventSource(`${BACKEND}/api/map_agentic?product=${encodeURIComponent(product)}&depth=${depth}`);
+  evtSrc.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'status') appendLog(d.message);
+      else if (d.type === 'oem_discovered') renderOEMs(d.oems);
+      else if (d.type === 'product_identified') {
+        if (!document.getElementById('productCard').classList.contains('visible')) renderProduct(d.product);
+      }
+      else if (d.type === 'tier_complete') {
+        renderTierMap(d.tier, d.suppliers);
+        renderTierList(d.tier, d.suppliers);
+        document.getElementById('downloadBar').classList.add('visible');
+        document.getElementById('btnPdf').disabled = false;
+        document.getElementById('btnWord').disabled = false;
+        document.getElementById('btnExcel').disabled = false;
+        document.getElementById('heatControls').style.display = 'block';
+        document.getElementById('tierFilter').classList.add('visible');
+      }
+      else if (d.type === 'complete') {
+        lastSupplyChain = mergeSupplyChains(lastSupplyChain, d.supply_chain, 'agentic');
+        if (d.supply_chain?.summary) {
+          document.getElementById('summaryText').textContent = lastSupplyChain.summary;
+          document.getElementById('summaryBlock').classList.add('visible');
+        }
+        updateStats(lastSupplyChain);
+        fitBounds();
+        document.getElementById('downloadBar').classList.add('visible');
+        document.getElementById('btnPdf').disabled = false;
+        document.getElementById('btnWord').disabled = false;
+        document.getElementById('btnExcel').disabled = false;
+        document.getElementById('heatControls').style.display = 'block';
+        document.getElementById('tierFilter').classList.add('visible');
+      }
+      else if (d.type === 'error') { appendLog(`❌ ${d.message}`, false); done(); }
+      else if (d.type === 'stream_end') {
+        appendLog('✅ Agentic mapping complete! Use the download buttons to export results.', false);
+        done();
+        evtSrc.close();
+      }
+    } catch(err) { console.error(err); }
+  };
+  evtSrc.onerror = () => { appendLog('❌ Connection lost. Is app.py running on port 5000?', false); done(); };
+  const done = () => {
+    btn.disabled = false; btn.innerHTML = '⚡ MAP AGENTIC';
+    mapBtn.disabled = false;
+    if (evtSrc) { evtSrc.close(); evtSrc = null; }
+    stopTimer();
   };
 }
 

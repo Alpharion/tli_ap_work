@@ -30,3 +30,8 @@ crawl4ai
 
 # ── dotenv ─────────────────────────────
 dotenv
+
+# ── Insights layer ──────────────────────
+networkx>=3.0
+pandas>=2.0.0
+matplotlib>=3.7.0

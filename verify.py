@@ -80,6 +80,10 @@ def _unique_urls(urls: list[str]) -> list[str]:
 _verify_queues: dict = {}
 _verify_queues_lock = threading.Lock()
 
+# Snapshot temp file paths for mid-run partial downloads: stream_id -> file path
+_snapshot_store: dict = {}
+_snapshot_lock = threading.Lock()
+
 
 # ── LLM verification helper ───────────────────────────────────────────────────
 
@@ -382,6 +386,18 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
 
                 push({"type": "log", "message": f"[excel] Row {row_idx} written — exists={result['company_exists']}, supply={result['supply_ties']}, component={result['correct_component']}", "is_error": False})
 
+                if processed % 10 == 0:
+                    with _snapshot_lock:
+                        snap_path = _snapshot_store.get(stream_id)
+                    if snap_path:
+                        try:
+                            snap_buf = io.BytesIO()
+                            wb.save(snap_buf)
+                            with open(snap_path, "wb") as sf:
+                                sf.write(snap_buf.getvalue())
+                        except Exception:
+                            pass
+
     push({"type": "status", "message": f"✅ Verification complete — {processed} row(s) processed."})
     return wb
 
@@ -397,7 +413,13 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
             if stream_id in _verify_queues:
                 _verify_queues[stream_id].append(event)
 
+    snap_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_snap:
+            snap_path = tmp_snap.name
+        with _snapshot_lock:
+            _snapshot_store[stream_id] = snap_path
+
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
         wb = annotate_workbook(wb, stream_id, provider)
 
@@ -421,6 +443,13 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
     except Exception as e:
         push({"type": "error", "message": str(e)})
     finally:
+        with _snapshot_lock:
+            _snapshot_store.pop(stream_id, None)
+        if snap_path:
+            try:
+                os.remove(snap_path)
+            except OSError:
+                pass
         push({"type": "done"})
 
 
@@ -449,6 +478,9 @@ def verify_page():
     label  { font-size: .9rem; color: #aaa; }
     #timer { display: none; font-size: .85rem; color: #e8ff47; margin-top: .75rem; letter-spacing: .05em; }
     #timer span { font-weight: bold; }
+    #snapshot-info { display: none; margin-top: .75rem; font-size: .82rem; color: #aaa; }
+    #snapshot-info a { color: #47c8ff; text-decoration: none; }
+    #snapshot-info a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -466,6 +498,7 @@ def verify_page():
   <button onclick="startVerification()">Upload &amp; Verify</button>
 
   <div id="timer">⏱ Elapsed: <span id="timerVal">0.0s</span></div>
+  <div id="snapshot-info">💾 If connection drops: <a id="snapshot-link" href="#" target="_blank">download partial results</a></div>
   <div id="log-container"><div id="log"></div></div>
 
   <script>
@@ -523,6 +556,10 @@ def verify_page():
       }
 
       append('Upload complete — starting verification…');
+      const snapshotLink = document.getElementById('snapshot-link');
+      snapshotLink.href = `/dev/verify/snapshot/${streamId}`;
+      document.getElementById('snapshot-info').style.display = 'block';
+
       const evtSource = new EventSource(`/dev/verify/stream/${streamId}`);
 
       evtSource.onmessage = (e) => {
@@ -569,6 +606,28 @@ def verify_page():
     return Response(html, mimetype="text/html")
 
 
+@verify_bp.route("/dev/verify/snapshot/<stream_id>")
+def verify_snapshot(stream_id):
+    """Download current partial results for a running verification job."""
+    with _snapshot_lock:
+        snap_path = _snapshot_store.get(stream_id)
+
+    if not snap_path or not os.path.exists(snap_path) or os.path.getsize(snap_path) == 0:
+        return jsonify({"error": "No snapshot available yet — job may not have processed 10 rows yet, or has already completed"}), 404
+
+    buf = io.BytesIO()
+    with open(snap_path, "rb") as f:
+        buf.write(f.read())
+    buf.seek(0)
+
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=f"partial_verify_{stream_id[:8]}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @verify_bp.route("/dev/verify/run", methods=["POST"])
 def verify_run():
     """Accept Excel upload, start background verification, return stream_id."""
@@ -603,8 +662,7 @@ def verify_stream(stream_id):
     import time as _time
 
     def generate():
-        deadline = _time.time() + 3600  # 1-hour max
-        while _time.time() < deadline:
+        while True:
             with _verify_queues_lock:
                 queue = _verify_queues.get(stream_id, [])
                 events, _verify_queues[stream_id] = queue[:], []
@@ -616,6 +674,8 @@ def verify_stream(stream_id):
                         _verify_queues.pop(stream_id, None)
                     return
 
+            if not events:
+                yield ": keepalive\n\n"
             _time.sleep(0.5)
 
     return Response(generate(), mimetype="text/event-stream", headers={

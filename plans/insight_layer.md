@@ -32,6 +32,67 @@ the loop from raw supply chain discovery → verification → actionable intelli
 
 ---
 
+## Visualisations (added)
+
+### Chart overview
+
+| Chart | Scope | Library |
+|---|---|---|
+| Choropleth map | Combined across ALL uploaded files | plotly + kaleido → PNG |
+| Sankey diagram | Per product (per source file) | plotly + kaleido → PNG |
+| Node-link diagram | Per product — most important OEM only | networkx + matplotlib → PNG |
+
+"Most important OEM" = the `supplies_to` target with the highest in-degree (most Tier-1 suppliers pointing to it) within that product's rows.
+
+### New dependencies
+```
+plotly>=5.0.0
+kaleido>=0.2.0
+```
+
+### DOCX structure (updated)
+
+```
+1.  Executive Summary
+2.  Geopolitical Concentration
+      [bar chart — all products]
+      [choropleth map — all products]   ← NEW
+      [table]
+3.  Key Components (all products)
+4.  Hub Companies (all products)
+5.  Potential Bottlenecks (all products)
+6.  Cross-Product Supplier Overlap      (only if >1 file)
+7.  Product Breakdown                   ← NEW SECTION
+      7.1  Product A
+             Hub Companies (Product A only)
+             Potential Bottlenecks (Product A only)
+             Key Components (Product A only)
+             [Sankey diagram]
+             [Node-link — Top OEM for Product A]
+      7.2  Product B
+             ...
+8.  Data Summary
+9.  Requires Further Research
+```
+
+### New helper functions (to keep insights.py concise)
+
+| Function | Purpose |
+|---|---|
+| `_group_by_source(rows)` | Group analysis_rows by source_file; returns list of (display_name, rows) |
+| `_analyse_product(rows)` | Compute per-product hub companies, bottlenecks, top components using NetworkX + Counter |
+| `_chart_choropleth(rows)` | Combined choropleth PNG (all products) using plotly.express |
+| `_chart_sankey(rows)` | Sankey PNG for one product using plotly.graph_objects |
+| `_chart_nodemap(rows)` | Node-link PNG for one product's most important OEM using nx + matplotlib |
+| `_most_important_oem(rows)` | Returns OEM name with highest in-degree across product rows |
+| `_add_picture_safe(doc, png_bytes, width)` | Wraps doc.add_picture, skips on error |
+| `_add_product_section(doc, helpers, display_name, rows, sub_num)` | Renders one product sub-section in DOCX |
+
+### Data ingestion change
+Each row must carry a `tier` field (integer) extracted from the sheet name (e.g. `ALL_TIER_1` → 1). Used by the Sankey to colour bands by tier level and by `_most_important_oem` to identify which nodes are OEMs.
+
+---
+
 ## Tech Stack Evaluation
 
 ### Options considered and verdicts

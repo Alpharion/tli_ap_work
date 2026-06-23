@@ -20,7 +20,7 @@ import uuid
 
 import openpyxl
 from flask import Blueprint, Response, jsonify, request, send_file
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from ai import call_ai, safe_parse_json
 from scraper import web_search
@@ -83,6 +83,10 @@ _verify_queues_lock = threading.Lock()
 # Snapshot temp file paths for mid-run partial downloads: stream_id -> file path
 _snapshot_store: dict = {}
 _snapshot_lock = threading.Lock()
+
+# Cancel events: stream_id -> threading.Event (set to request cancellation)
+_cancel_store: dict = {}
+_cancel_lock = threading.Lock()
 
 
 # ── LLM verification helper ───────────────────────────────────────────────────
@@ -228,6 +232,41 @@ def _find_col(ws, header_name: str) -> int | None:
         if cell.value and str(cell.value).strip().lower() == header_name.lower():
             return cell.column
     return None
+
+
+_THIN_BORDER = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin"),
+)
+
+def _finalise_sheet(ws):
+    """Auto-fit column widths, apply borders to all data cells, and enable AutoFilter."""
+    # ── Column widths based on max content length per column ─────────────────
+    for col_cells in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col_cells[0].column)
+        for cell in col_cells:
+            if cell.value is not None:
+                # Account for newlines in wrapped text: use longest line
+                lines = str(cell.value).split("\n")
+                max_len = max(max_len, max(len(line) for line in lines))
+        # Add padding, cap at 80 chars so columns don't become unreadably wide
+        ws.column_dimensions[col_letter].width = min(max_len + 2, 80)
+
+    # ── Borders on all non-empty cells ────────────────────────────────────────
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
+        for cell in row:
+            if cell.value is not None:
+                cell.border = _THIN_BORDER
+
+    # ── Row bestFit so Excel auto-calculates height for wrapped text ──────────
+    for row_idx in range(2, ws.max_row + 1):
+        ws.row_dimensions[row_idx].bestFit = True
+
+    # ── AutoFilter across all used columns ────────────────────────────────────
+    ws.auto_filter.ref = ws.dimensions
 
 
 def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> openpyxl.Workbook:
@@ -398,6 +437,19 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
                         except Exception:
                             pass
 
+                # Check for user-requested cancellation
+                with _cancel_lock:
+                    cancel_evt = _cancel_store.get(stream_id)
+                if cancel_evt and cancel_evt.is_set():
+                    for f in futures:
+                        f.cancel()
+                    push({"type": "cancelled", "processed": processed})
+                    break
+
+    # ── Finalise all tier sheets: widths, borders, filter, row heights ───────
+    for ws in tier_sheets:
+        _finalise_sheet(ws)
+
     push({"type": "status", "message": f"✅ Verification complete — {processed} row(s) processed."})
     return wb
 
@@ -414,7 +466,11 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
                 _verify_queues[stream_id].append(event)
 
     snap_path = None
+    cancel_evt = threading.Event()
     try:
+        with _cancel_lock:
+            _cancel_store[stream_id] = cancel_evt
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_snap:
             snap_path = tmp_snap.name
         with _snapshot_lock:
@@ -432,7 +488,9 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
             tmp.write(buf.read())
             tmp_path = tmp.name
 
-        out_filename = filename.replace(".xlsx", "_verified.xlsx")
+        was_cancelled = cancel_evt.is_set()
+        suffix = "_partial.xlsx" if was_cancelled else "_verified.xlsx"
+        out_filename = filename.replace(".xlsx", suffix)
         file_id = uuid.uuid4().hex
         with _export_files_lock:
             _export_files[file_id] = {"path": tmp_path, "filename": out_filename}
@@ -443,6 +501,8 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
     except Exception as e:
         push({"type": "error", "message": str(e)})
     finally:
+        with _cancel_lock:
+            _cancel_store.pop(stream_id, None)
         with _snapshot_lock:
             _snapshot_store.pop(stream_id, None)
         if snap_path:
@@ -468,6 +528,9 @@ def verify_page():
     input[type=file] { margin: 1rem 0; display: block; color: #eee; }
     button { background: #333; color: #eee; border: 1px solid #555; padding: .5rem 1.5rem; cursor: pointer; font-family: monospace; }
     button:hover { background: #444; }
+    #stopBtn { background: #5c1a1a; border-color: #a33; display: none; margin-left: .5rem; }
+    #stopBtn:hover { background: #7a2020; }
+    #stopBtn:disabled { opacity: .5; cursor: not-allowed; }
     #log-container { height: 400px; overflow-y: auto; background: #1a1a1a; border: 1px solid #333; padding: .75rem; margin-top: 1.5rem; border-radius: 4px; }
     #log div { margin: 2px 0; font-size: .85rem; line-height: 1.6; }
     .done    { color: #4caf50; }
@@ -495,7 +558,8 @@ def verify_page():
   </select>
 
   <input type="file" id="fileInput" accept=".xlsx">
-  <button onclick="startVerification()">Upload &amp; Verify</button>
+  <button id="uploadBtn" onclick="startVerification()">Upload &amp; Verify</button>
+  <button id="stopBtn" onclick="stopVerification()">⛔ Stop</button>
 
   <div id="timer">⏱ Elapsed: <span id="timerVal">0.0s</span></div>
   <div id="snapshot-info">💾 If connection drops: <a id="snapshot-link" href="#" target="_blank">download partial results</a></div>
@@ -514,6 +578,27 @@ def verify_page():
 
     let timerInterval = null;
     let timerStart = null;
+    let activeStreamId = null;
+
+    const uploadBtn = document.getElementById('uploadBtn');
+    const stopBtn   = document.getElementById('stopBtn');
+
+    function setRunning(running) {
+      uploadBtn.disabled = running;
+      stopBtn.style.display = running ? 'inline-block' : 'none';
+      stopBtn.disabled = false;
+    }
+
+    async function stopVerification() {
+      if (!activeStreamId) return;
+      stopBtn.disabled = true;
+      stopBtn.textContent = '⛔ Stopping…';
+      try {
+        await fetch(`/api/verify/cancel/${activeStreamId}`, { method: 'POST' });
+      } catch (e) {
+        append('Could not reach cancel endpoint: ' + e, 'error');
+      }
+    }
 
     function startTimer() {
       timerStart = Date.now();
@@ -540,6 +625,7 @@ def verify_page():
 
       const provider = document.getElementById('provider').value;
       append(`Uploading ${file.name}…`);
+      setRunning(true);
 
       const fd = new FormData();
       fd.append('file', file);
@@ -549,10 +635,11 @@ def verify_page():
       try {
         const res = await fetch('/dev/verify/run', { method: 'POST', body: fd });
         const data = await res.json();
-        if (data.error) { append('Error: ' + data.error, 'error'); return; }
+        if (data.error) { append('Error: ' + data.error, 'error'); setRunning(false); return; }
         streamId = data.stream_id;
+        activeStreamId = streamId;
       } catch (e) {
-        append('Upload failed: ' + e, 'error'); return;
+        append('Upload failed: ' + e, 'error'); setRunning(false); return;
       }
 
       append('Upload complete — starting verification…');
@@ -576,6 +663,11 @@ def verify_page():
           append(msg.message);
         } else if (msg.type === 'log') {
           append(msg.message, msg.is_error ? 'log-err' : 'log-line');
+        } else if (msg.type === 'cancelled') {
+          stopTimer();
+          append(`⛔ Stopped after ${msg.processed} row(s) — downloading partial results…`, 'error');
+          setRunning(false);
+          stopBtn.textContent = '⛔ Stop';
         } else if (msg.type === 'file_ready') {
           append(`✓ Done — downloading ${msg.filename}`, 'done');
           const a = document.createElement('a');
@@ -584,12 +676,15 @@ def verify_page():
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
+          setRunning(false);
           evtSource.close();
         } else if (msg.type === 'error') {
           stopTimer();
           append('Error: ' + msg.message, 'error');
+          setRunning(false);
           evtSource.close();
         } else if (msg.type === 'done') {
+          setRunning(false);
           evtSource.close();
         }
       };
@@ -597,6 +692,7 @@ def verify_page():
       evtSource.onerror = () => {
         stopTimer();
         append('Connection lost.', 'error');
+        setRunning(false);
         evtSource.close();
       };
     }
@@ -604,6 +700,17 @@ def verify_page():
 </body>
 </html>"""
     return Response(html, mimetype="text/html")
+
+
+@verify_bp.route("/api/verify/cancel/<stream_id>", methods=["POST"])
+def verify_cancel(stream_id):
+    """Signal the running verification job to stop after the current row."""
+    with _cancel_lock:
+        evt = _cancel_store.get(stream_id)
+    if evt:
+        evt.set()
+        return jsonify({"ok": True})
+    return jsonify({"error": "No active job found for this stream_id"}), 404
 
 
 @verify_bp.route("/dev/verify/snapshot/<stream_id>")

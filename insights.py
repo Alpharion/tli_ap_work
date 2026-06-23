@@ -19,6 +19,7 @@ Register in app.py via:
 import io
 import json
 import os
+import re
 import tempfile
 import threading
 import uuid
@@ -113,6 +114,9 @@ def _ingest_files(files_data, stream_id):
                 _log(stream_id, f"[warn] Sheet '{ws.title}' has no 'Company Name' column — skipping", True)
                 continue
 
+            tier_match = re.search(r'tier[_\s]*(\d+)', ws.title.lower())
+            tier_num   = int(tier_match.group(1)) if tier_match else 1
+
             for row in ws.iter_rows(min_row=2, values_only=True):
                 def get(key):
                     col = cols.get(key)
@@ -136,6 +140,7 @@ def _ingest_files(files_data, stream_id):
                     "components":   get("components"),
                     "product":      get("product"),
                     "source_file":  filename,
+                    "tier":         tier_num,
                 }
 
                 if exists and supply and component:
@@ -262,6 +267,313 @@ def _run_networkx(analysis_rows, stream_id):
     }
 
 
+# ── Per-product helpers ───────────────────────────────────────────────────────
+
+def _group_by_source(analysis_rows):
+    """Group rows by source_file. Returns list of (display_name, rows) sorted by source_file."""
+    groups = {}
+    for row in analysis_rows:
+        groups.setdefault(row["source_file"], []).append(row)
+    result = []
+    for source_file, rows in sorted(groups.items()):
+        names = [r["product"] for r in rows if r.get("product")]
+        display = names[0] if names else source_file
+        result.append((display, rows))
+    return result
+
+
+def _most_important_oem(rows):
+    """Return the supplies_to value with the highest in-degree across these rows."""
+    counter = Counter(r["supplies_to"] for r in rows if r.get("supplies_to"))
+    return counter.most_common(1)[0][0] if counter else None
+
+
+def _analyse_product(rows):
+    """Compute per-product hub companies, bottlenecks, and top components."""
+    import networkx as nx
+    G = nx.DiGraph()
+    node_inferred = {}
+    for row in rows:
+        src, dst = row["company_name"], row["supplies_to"]
+        if src and dst:
+            G.add_edge(src, dst)
+            node_inferred[src] = node_inferred.get(src, False) or row["_inferred"]
+
+    hub_companies = [
+        {"company": n, "supplies_to_count": d, "inferred": node_inferred.get(n, False)}
+        for n, d in sorted(G.out_degree(), key=lambda x: x[1], reverse=True)[:5]
+        if d > 0
+    ]
+
+    if G.number_of_nodes() > 1:
+        bc = nx.betweenness_centrality(G)
+        bottlenecks = [
+            {"company": n, "centrality_score": round(s, 4), "inferred": node_inferred.get(n, False)}
+            for n, s in sorted(bc.items(), key=lambda x: x[1], reverse=True)[:5]
+            if s > 0
+        ]
+    else:
+        bottlenecks = []
+
+    all_components = []
+    for row in rows:
+        comp_str = row.get("components", "")
+        if comp_str:
+            all_components.extend(c.strip() for c in comp_str.split(",") if c.strip())
+    top_components = [{"component": c, "count": n} for c, n in Counter(all_components).most_common(10)]
+
+    return {"hub_companies": hub_companies, "bottlenecks": bottlenecks, "top_components": top_components}
+
+
+def _chart_choropleth(rows, title="Supplier Geographic Concentration"):
+    """Choropleth PNG of supplier countries. Pass all rows for combined, or product rows for per-product."""
+    try:
+        import plotly.express as px
+        import pandas as pd
+        country_counts = Counter(
+            r["country"] for r in rows
+            if r.get("country") and r["country"] not in ("Unknown", "")
+        )
+        if not country_counts:
+            return None
+        df = pd.DataFrame(list(country_counts.items()), columns=["country", "count"])
+        fig = px.choropleth(
+            df, locations="country", locationmode="country names",
+            color="count", color_continuous_scale="Blues",
+            title=title,
+        )
+        fig.update_layout(margin={"l": 0, "r": 0, "t": 40, "b": 0}, height=400)
+        return fig.to_image(format="png", width=800, height=400)
+    except Exception:
+        return None
+
+
+def _chart_sankey(rows):
+    """Sankey diagram PNG for one product: Tier-N → … → Tier-1 → OEM."""
+    try:
+        import plotly.graph_objects as go
+
+        # Collect unique node names preserving tier order
+        node_set, node_index = [], {}
+        def _node(name):
+            if name not in node_index:
+                node_index[name] = len(node_set)
+                node_set.append(name)
+            return node_index[name]
+
+        # Assign colours by tier (source company's tier)
+        tier_colours = {1: "rgba(21,101,192,0.7)", 2: "rgba(230,81,0,0.7)", 3: "rgba(106,27,154,0.7)"}
+        link_src, link_tgt, link_val, link_col = [], [], [], []
+
+        for row in rows:
+            src, dst = row.get("company_name", ""), row.get("supplies_to", "")
+            if src and dst:
+                link_src.append(_node(src))
+                link_tgt.append(_node(dst))
+                link_val.append(1)
+                link_col.append(tier_colours.get(row.get("tier", 1), "rgba(100,100,100,0.4)"))
+
+        if not link_src:
+            return None
+
+        # Node colours: OEM = green, else by most common tier of outgoing edges
+        node_tier = {}
+        for row in rows:
+            src = row.get("company_name", "")
+            if src:
+                node_tier.setdefault(src, row.get("tier", 1))
+        node_colours = []
+        oem_names = {r.get("supplies_to", "") for r in rows if r.get("supplies_to")} - \
+                    {r.get("company_name", "") for r in rows if r.get("company_name")}
+        for name in node_set:
+            if name in oem_names:
+                node_colours.append("rgba(27,94,32,0.9)")
+            else:
+                node_colours.append(tier_colours.get(node_tier.get(name, 1), "rgba(100,100,100,0.7)"))
+
+        fig = go.Figure(go.Sankey(
+            node=dict(label=node_set, color=node_colours, pad=12, thickness=16),
+            link=dict(source=link_src, target=link_tgt, value=link_val, color=link_col),
+        ))
+        fig.update_layout(
+            title_text="Supply Chain Flow (Tier-N → OEM)",
+            font_size=10, height=500, margin={"l": 20, "r": 20, "t": 50, "b": 20},
+        )
+        return fig.to_image(format="png", width=900, height=500)
+    except Exception:
+        return None
+
+
+def _chart_nodemap(rows):
+    """Node-link diagram PNG centred on the most important OEM for one product.
+
+    Node tier is computed relative to the OEM, not from the global sheet tier:
+      - OEM itself          → green
+      - Directly supplies OEM (relative Tier 1) → blue
+      - Supplies a Tier-1 node (relative Tier 2) → orange
+    """
+    try:
+        import networkx as nx
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+
+        oem = _most_important_oem(rows)
+        if not oem:
+            return None
+
+        # Build subgraph: OEM + relative Tier-1 + relative Tier-2
+        rel_tier1 = {r["company_name"] for r in rows if r.get("supplies_to") == oem}
+        subgraph_rows = [
+            r for r in rows
+            if r.get("supplies_to") == oem or r.get("supplies_to") in rel_tier1
+        ]
+        if not subgraph_rows:
+            return None
+
+        G = nx.DiGraph()
+        for row in subgraph_rows:
+            G.add_edge(row["company_name"], row["supplies_to"])
+
+        # Assign relative tier to each node
+        def _rel_tier(node):
+            if node == oem:
+                return 0          # OEM
+            if node in rel_tier1:
+                return 1          # directly feeds OEM
+            return 2              # feeds a Tier-1 node
+
+        colour_map = {0: "#1B5E20", 1: "#1565C0", 2: "#E65100"}
+        node_list   = list(G.nodes())
+        n_nodes     = len(node_list)
+
+        # Scale sizes and font down for large graphs
+        if n_nodes <= 12:
+            node_size, font_size, k_spread = 900, 8, 2.0
+        elif n_nodes <= 25:
+            node_size, font_size, k_spread = 550, 7, 1.8
+        else:
+            node_size, font_size, k_spread = 320, 6, 1.5
+
+        node_colours = [colour_map.get(_rel_tier(n), "#888888") for n in node_list]
+        sizes        = [node_size * 1.6 if n == oem else node_size for n in node_list]
+
+        pos = nx.spring_layout(G, seed=42, k=k_spread)
+
+        fig, ax = plt.subplots(figsize=(10, 7))
+        ax.set_facecolor("#F8F8F8")
+
+        nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=node_list,
+                               node_color=node_colours, node_size=sizes, alpha=0.9)
+        nx.draw_networkx_edges(G, pos, ax=ax,
+                               edge_color="#999999", arrows=True, arrowsize=14,
+                               width=1.0, connectionstyle="arc3,rad=0.05")
+        nx.draw_networkx_labels(G, pos, ax=ax,
+                                font_size=font_size, font_color="black", font_weight="bold",
+                                bbox=dict(facecolor="white", alpha=0.65,
+                                          edgecolor="none", boxstyle="round,pad=0.2"))
+
+        ax.set_title(f"Supply Network — Top OEM: {oem}", fontsize=10, pad=10)
+        ax.axis("off")
+
+        legend_elements = [
+            Patch(facecolor="#1B5E20", label="OEM"),
+            Patch(facecolor="#1565C0", label="Tier 1 (direct supplier to OEM)"),
+            Patch(facecolor="#E65100", label="Tier 2 (supplier to Tier 1)"),
+        ]
+        ax.legend(handles=legend_elements, loc="lower left", fontsize=8,
+                  framealpha=0.8, edgecolor="#cccccc")
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception:
+        return None
+
+
+def _add_picture_safe(doc, png_bytes, width_inches=5.5):
+    """Embed a PNG into the DOCX, silently skip if bytes is None or on error."""
+    if not png_bytes:
+        return
+    try:
+        from docx.shared import Inches
+        doc.add_picture(io.BytesIO(png_bytes), width=Inches(width_inches))
+    except Exception:
+        pass
+
+
+def _add_product_section(doc, helpers, display_name, rows, sub_num):
+    """Render one product sub-section: metrics tables + Sankey + node-link."""
+    _ct      = helpers["_ct"]
+    _hdr_row = helpers["_hdr_row"]
+    _flag_row = helpers["_flag_row"]
+
+    doc.add_heading(f"{sub_num}. {display_name}", level=2)
+
+    metrics = _analyse_product(rows)
+
+    # Hub companies
+    if metrics["hub_companies"]:
+        doc.add_heading("Hub Companies", level=3)
+        tbl = doc.add_table(rows=1, cols=3)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["Company", "Customers Supplied", "Note"], "1565C0")
+        for entry in metrics["hub_companies"]:
+            row = tbl.add_row().cells
+            _flag_row(row, entry)
+            _ct(row[1], entry["supplies_to_count"])
+        doc.add_paragraph()
+
+    # Bottlenecks
+    if metrics["bottlenecks"]:
+        doc.add_heading("Potential Bottlenecks", level=3)
+        tbl = doc.add_table(rows=1, cols=3)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["Company", "Centrality Score", "Note"], "6A1B9A")
+        for entry in metrics["bottlenecks"]:
+            row = tbl.add_row().cells
+            _flag_row(row, entry)
+            _ct(row[1], entry["centrality_score"])
+        doc.add_paragraph()
+
+    # Key components
+    if metrics["top_components"]:
+        doc.add_heading("Key Components", level=3)
+        tbl = doc.add_table(rows=1, cols=2)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["Component", "Frequency"], "1B5E20")
+        for entry in metrics["top_components"]:
+            row = tbl.add_row().cells
+            _ct(row[0], entry["component"])
+            _ct(row[1], entry["count"])
+        doc.add_paragraph()
+
+    # Per-product choropleth
+    choropleth_png = _chart_choropleth(rows, title=f"Geographic Distribution — {display_name}")
+    if choropleth_png:
+        doc.add_heading("Geographic Distribution", level=3)
+        _add_picture_safe(doc, choropleth_png, 5.5)
+        doc.add_paragraph()
+
+    # Sankey
+    sankey_png = _chart_sankey(rows)
+    if sankey_png:
+        doc.add_heading("Supply Chain Flow", level=3)
+        _add_picture_safe(doc, sankey_png, 5.5)
+        doc.add_paragraph()
+
+    # Node-link
+    oem = _most_important_oem(rows)
+    nodemap_png = _chart_nodemap(rows)
+    if nodemap_png:
+        doc.add_heading(f"Supply Network — Top OEM: {oem}", level=3)
+        _add_picture_safe(doc, nodemap_png, 5.5)
+        doc.add_paragraph()
+
+
 # ── Claude narrative ──────────────────────────────────────────────────────────
 
 def _generate_narrative(metrics, stream_id):
@@ -309,7 +621,7 @@ Return ONLY valid JSON (no markdown, no code fences) with these exact keys:
 
 # ── DOCX builder ──────────────────────────────────────────────────────────────
 
-def _build_docx(metrics, narrative, analysis_rows, research_rows):
+def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
     from docx.oxml.ns import qn
@@ -349,6 +661,9 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):
         if entry.get("inferred"):
             _ct(cells[-1], "Model inference")
             _set_bg(cells[-1], "FFFDE7")
+
+    # Pass closures to per-product section renderer
+    _docx_helpers = {"_ct": _ct, "_hdr_row": _hdr_row, "_flag_row": _flag_row}
 
     doc = Document()
     for sec in doc.sections:
@@ -396,6 +711,9 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):
         chart_buf.seek(0)
         doc.add_picture(chart_buf, width=Inches(5.5))
 
+    choropleth_png = _chart_choropleth(analysis_rows, title="Supplier Geographic Concentration (All Products)")
+    _add_picture_safe(doc, choropleth_png, 5.5)
+
     tbl = doc.add_table(rows=1, cols=3)
     tbl.style = "Table Grid"
     _hdr_row(tbl, ["Country", "Supplier Count", "% of Total"], "1A237E")
@@ -417,6 +735,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):
         _ct(row[0], entry["component"])
         _ct(row[1], entry["count"])
     doc.add_paragraph()
+
 
     # ── Hub Companies ────────────────────────────────────────────────────────
     doc.add_heading("4. Hub Companies", level=1)
@@ -456,6 +775,18 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):
             _ct(row[1], ", ".join(entry["products"]))
         doc.add_paragraph()
         next_sec += 1
+
+    # ── Product Breakdown ────────────────────────────────────────────────────
+    product_groups = _group_by_source(analysis_rows)
+    doc.add_heading(f"{next_sec}. Product Breakdown", level=1)
+    doc.add_paragraph(
+        "The following sub-sections provide per-product analysis including hub companies, "
+        "potential bottlenecks, key components, and supply chain visualisations."
+    )
+    for sub_i, (display_name, prod_rows) in enumerate(product_groups, 1):
+        _add_product_section(doc, _docx_helpers, display_name, prod_rows, f"{next_sec}.{sub_i}")
+    doc.add_paragraph()
+    next_sec += 1
 
     # ── Data Summary ─────────────────────────────────────────────────────────
     doc.add_heading(f"{next_sec}. Data Summary", level=1)
@@ -534,7 +865,8 @@ def _run_insights(stream_id, files_data):
 
         narrative = _generate_narrative(metrics, stream_id)
 
-        _status(stream_id, "📄 Building DOCX report…")
+        _status(stream_id, "🗺️ Generating choropleth map…")
+        _status(stream_id, "📄 Building DOCX report (per-product charts may take ~10s)…")
         docx_bytes = _build_docx(metrics, narrative, analysis_rows, research_rows)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:

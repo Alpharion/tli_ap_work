@@ -30,6 +30,8 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem;letter-spacing:-.02em}
 .logo span{color:var(--accent)}
 .tagline{font-size:.62rem;color:var(--muted1);letter-spacing:.15em;text-transform:uppercase}
+.nav-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-family:'Space Mono',monospace;font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border-radius:3px;cursor:pointer;text-decoration:none;transition:border-color .2s,color .2s}
+.nav-btn:hover{border-color:var(--accent2);color:var(--accent2)}
 .tabs{display:flex;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:9}
 .tab-btn{padding:13px 26px;font-family:'Space Mono',monospace;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
 .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
@@ -238,7 +240,11 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
     <div class="logo"><img src="{{ url_for('static', filename='images/nusW-tliap_transparent_bg.png') }}" width="320" height="80" style="vertical-align: middle;"> Supplier<span>Map</span></div>
     <div class="tagline">Supply Chain Intelligence</div>
   </div>
-  <div style="font-size:.62rem;color:var(--muted);text-align:right">Powered by web crawling + AI<br><span style="color:var(--accent)">● LIVE</span></div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <a class="nav-btn" href="/dev/verify">🔍 Verify Suppliers</a>
+    <a class="nav-btn" href="/dev/insights">💡 Insights</a>
+    <div style="font-size:.62rem;color:var(--muted);text-align:right">Powered by web crawling + AI<br><span style="color:var(--accent)">● LIVE</span></div>
+  </div>
 </header>
 
 <div class="tabs">

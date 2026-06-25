@@ -20,7 +20,20 @@ python-docx>=1.1.0
 python-dotenv>=1.0.0
 
 # ── DDG Search ────────────────────────────────────────────────────────────────────
-duckduckgo_search
+ddgs
 
 # ── Excel Export ────────────────────────────────────────────
 openpyxl
+
+# ── Web scraping pipeline (scraper.py) ───────────────────────
+crawl4ai
+
+# ── dotenv ─────────────────────────────
+dotenv
+
+# ── Insights layer ──────────────────────
+networkx>=3.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+plotly>=5.0.0
+kaleido>=0.2.0

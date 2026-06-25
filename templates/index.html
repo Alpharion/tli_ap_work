@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-polylinedecorator/1.6.0/leaflet.polylineDecorator.min.js"></script>
 <style>
 :root {
   --bg:#e1e0d7;
@@ -50,6 +51,9 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .btn-map{background:var(--accent1);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
 .btn-map:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(232,255,71,.3)}
 .btn-map:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-agentic{background:var(--accent2);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
+.btn-agentic:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(71,200,255,.3)}
+.btn-agentic:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
 
 /* log */
 .status-log{background:var(--bg1);border:1px solid var(--border);border-radius:3px;padding:14px;margin-top:18px;max-height:130px;overflow-y:auto;display:none}
@@ -181,9 +185,29 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .btn-dl.pdf:hover{box-shadow:0 4px 16px rgba(255,107,71,.3)}
 .btn-dl.word{background:transparent;color:#47c8ff;border-color:#47c8ff}
 .btn-dl.word:hover{box-shadow:0 4px 16px rgba(71,200,255,.3)}
+.btn-dl.excel{background:transparent;color:#4ade80;border-color:#4ade80}
+.btn-dl.excel:hover{box-shadow:0 4px 16px rgba(74,222,128,.3)}
 .dl-label{font-size:.65rem;color:var(--muted1)}
  
 
+/* ── Tier filter panel ── */
+.tier-filter{position:absolute;bottom:60px;right:12px;z-index:1000;background:rgba(10,11,15,.92);border:1px solid var(--border);padding:12px 14px;border-radius:4px;backdrop-filter:blur(8px);display:none;min-width:150px}
+.tier-filter.visible{display:block}
+.filter-title{font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.filter-btns{display:flex;flex-direction:column;gap:6px}
+.filter-btn{display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:3px;border:1px solid var(--border);background:var(--surface2);font-family:'Space Mono',monospace;font-size:.68rem;cursor:pointer;color:var(--muted);transition:all .15s;text-align:left;width:100%}
+.filter-btn:hover{border-color:var(--muted);color:var(--text)}
+.filter-btn.fb-active{color:#0a0b0f;border-color:transparent}
+.filter-btn .fb-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.filter-sep{height:1px;background:var(--border);margin:3px 0}
+/* ── Animated supply direction lines ── */
+.leaflet-overlay-pane svg path.supply-link {
+  animation: dash-flow 1.8s linear infinite;
+}
+@keyframes dash-flow {
+  from { stroke-dashoffset: 42; }
+  to   { stroke-dashoffset: 0; }
+}
 .spinner{display:inline-block;width:13px;height:13px;border:2px solid rgba(232,255,71,.2);border-top-color:var(--accent1);border-radius:50%;animation:spin .7s linear infinite;margin-right:7px;vertical-align:middle}
 @keyframes spin{to{transform:rotate(360deg)}}
 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
@@ -236,8 +260,14 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
         </select>
       </div>
       <button class="btn-map" id="mapBtn" onclick="startMapping()">▶ MAP CHAIN</button>
+      <button class="btn-agentic" id="agenticBtn" onclick="startAgenticMapping()">⚡ MAP AGENTIC</button>
     </div>
-    <div id="providerStatus" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px">
+    <div id="providerStatus" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+    <div id="timerDisplay" style="font-family:'Space Mono',monospace;font-size:.7rem;color:var(--muted);display:none">
+      ⏱ <span id="timerValue">0.0s</span>
+    </div>
+  </div>
     <div class="status-log" id="statusLog"></div>
   </div>
 
@@ -266,6 +296,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
     <span class="dl-label">Download results:</span>
     <button class="btn-dl pdf" id="btnPdf" onclick="downloadReport('pdf')" disabled>📄 Download PDF</button>
     <button class="btn-dl word" id="btnWord" onclick="downloadReport('docx')" disabled>📝 Download Word</button>
+    <button class="btn-dl excel" id="btnExcel" onclick="exportExcel()" disabled>📊 Export Excel</button>
   </div>
 
   <!-- MAP TAB -->
@@ -318,6 +349,30 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
           <span class="heat-label">Tier 4 only</span>
           <input type="checkbox" id="heat4" onchange="toggleHeat('tier_4',this.checked)">
         </label> -->
+      </div>
+
+      <!-- Tier filter panel -->
+      <div class="tier-filter" id="tierFilter">
+        <div class="filter-title">🔍 Filter Tiers</div>
+        <div class="filter-btns" id="filterBtns">
+          <button class="filter-btn fb-active" id="fbAll" data-tier="all" onclick="filterTier('all')"
+            style="background:var(--surface);color:var(--text);border-color:var(--muted)">
+            <span class="fb-dot" style="background:var(--muted)"></span>All Tiers
+          </button>
+          <div class="filter-sep"></div>
+          <button class="filter-btn" id="fbOEM" data-tier="0" onclick="filterTier(0)">
+            <span class="fb-dot" style="background:#d50c0c"></span>OEM
+          </button>
+          <button class="filter-btn" id="fbT1" data-tier="1" onclick="filterTier(1)">
+            <span class="fb-dot" style="background:#47c8ff"></span>Tier 1
+          </button>
+          <button class="filter-btn" id="fbT2" data-tier="2" onclick="filterTier(2)">
+            <span class="fb-dot" style="background:#e8ff47"></span>Tier 2
+          </button>
+          <button class="filter-btn" id="fbT3" data-tier="3" onclick="filterTier(3)">
+            <span class="fb-dot" style="background:#a78bfa"></span>Tier 3
+          </button>
+        </div>
       </div>
 
       <div class="map-stats" id="mapStats"></div>
@@ -428,6 +483,7 @@ function initMap() {
   Object.keys(tierNodes).forEach(k => delete tierNodes[k]);
   edgeReg.length = 0;
   focusedNode = null;
+  activeFilter = 'all';
   oemMarker = null;
   resetHeatPoints();
 
@@ -465,45 +521,95 @@ let focusedNode = null;
 
 function drawLine(fromLat, fromLng, toLat, toLng, color, fromKey, toKey) {
   if (!lmap) return;
+
+  // Animated dashed line — direction: parent (from) → child (to)
   const line = L.polyline([[fromLat, fromLng], [toLat, toLng]], {
-    color, weight:1.5, opacity:0.55, dashArray:'5 7'
+    color, weight: 2, opacity: 0.65,
+    dashArray: '10 8', dashOffset: '0',
+    className: 'supply-link'
   }).addTo(lmap);
-  edgeReg.push({line, fromKey, toKey});
+
+  // Arrowhead at 60% along the line pointing parent → child
+  let decorator = null;
+  if (typeof L.polylineDecorator !== 'undefined') {
+    decorator = L.polylineDecorator(line, {
+      patterns: [{
+        offset: '60%',
+        repeat: 0,
+        symbol: L.Symbol.arrowHead({
+          pixelSize: 9,
+          polygon: false,
+          pathOptions: {
+            color,
+            weight: 2.5,
+            opacity: 0.85,
+            fillOpacity: 0
+          }
+        })
+      }]
+    }).addTo(lmap);
+  }
+
+  edgeReg.push({ line, decorator, fromKey, toKey });
 }
 
 function focusNode(key) {
-  if (focusedNode === key) {clearFocus(); return; }
-  
+  if (focusedNode === key) { clearFocus(); return; }
   focusedNode = key;
-  const connected = new Set([key]);
-  const connectedDown = new Set([key]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    edgeReg.forEach (e => {
-      if (connected.has(e.fromKey) && !connected.has(e.toKey)) {connected.add(e.toKey); changed=true; }
-      if (connectedDown.has(e.toKey) && !connectedDown.has(e.fromKey)) {connectedDown.add(e.fromKey); changed=true;}
-    });
 
-  }
+  // highlighted = clicked node + direct parent(s) + direct children
+  // edge convention: fromKey=parent, toKey=child
+  const highlighted = new Set([key]);
 
   edgeReg.forEach(e => {
-    const active = (connected.has(e.fromKey) && connected.has(e.toKey)) || (connectedDown.has(e.fromKey) && connectedDown.has(e.toKey));
-    e.line.setStyle({ opacity: active ? 0.85 : 0.05, weight: active ? 2.5 : 0.5});
+    if (e.toKey   === key) highlighted.add(e.fromKey); // one level UP (parent)
+    if (e.fromKey === key) highlighted.add(e.toKey);   // one level DOWN (child)
   });
 
+  // highlight lines + decorators that connect two highlighted nodes
+  edgeReg.forEach(e => {
+    const active = highlighted.has(e.fromKey) && highlighted.has(e.toKey);
+    e.line.setStyle({ opacity: active ? 0.9 : 0.04, weight: active ? 3 : 0.5 });
+    if (e.decorator) {
+      e.decorator.setStyle && e.decorator.setStyle({ opacity: active ? 0.9 : 0.04 });
+      const el = e.decorator.getElement ? e.decorator.getElement() : null;
+      if (el) el.style.opacity = active ? '1' : '0.04';
+    }
+  });
+
+  // highlight nodes
   Object.entries(nodeReg).forEach(([k, n]) => {
     if (!n?.marker) return;
-    n.marker.setStyle({ fillOpacity: connected.has(k) || connectedDown.has(k) ? 0.95 : 0.05, opacity: connected.has(k) || connectedDown.has(k) ? 1 : 0.05 });
+    const isHighlighted = highlighted.has(k);
+    const isFocus       = k === key;
+    n.marker.setStyle({
+      fillOpacity: isHighlighted ? 0.95 : 0.05,
+      opacity:     isHighlighted ? 1    : 0.05,
+      weight:      isFocus ? 3 : 1,
+      color:       isFocus ? '#ffffff' : 'rgba(0,0,0,0.5)',
+      radius:      isFocus ? (n.marker.options.radius * 1.4) : n.marker.options.radius
+    });
   });
 }
 
 function clearFocus() {
   focusedNode = null;
-  edgeReg.forEach(e => e.line.setStyle( { opacity: 0.55, weight: 1.5 })); // change back to default
+  edgeReg.forEach(e => {
+    e.line.setStyle({ opacity: 0.65, weight: 2 });
+    if (e.decorator) {
+      const el = e.decorator.getElement ? e.decorator.getElement() : null;
+      if (el) el.style.opacity = '';
+    }
+  });
   Object.values(nodeReg).forEach(n => {
     if (!n?.marker) return;
-    n.marker.setStyle({ fillOpacity: 0.9, opacity: 1 });
+    n.marker.setStyle({
+      fillOpacity: 0.9,
+      opacity: 1,
+      weight: 1,
+      color: 'rgba(0,0,0,0.5)',
+      radius: n.marker.options.radius  // restore original
+    });
   });
 }
 
@@ -512,6 +618,88 @@ function fitBounds() {
   const latlngs = [];
   lmap.eachLayer(l => { if (l.getLatLng) latlngs.push(l.getLatLng()); });
   if (latlngs.length > 0) lmap.fitBounds(L.latLngBounds(latlngs), {padding:[40,40], maxZoom:6});
+}
+
+// ── Tier filter ───────────────────────────────────────────────────────────────
+let activeFilter = 'all';
+
+// tier colour lookup for filter button active state
+const TIER_DOT_COLORS = {
+  'all': 'var(--surface)', 0: '#d50c0c', 1: '#47c8ff', 2: '#e8ff47', 3: '#a78bfa'
+};
+const FB_IDS = { 'all':'fbAll', 0:'fbOEM', 1:'fbT1', 2:'fbT2', 3:'fbT3' };
+
+function filterTier(tier) {
+  // clear any focus first
+  if (focusedNode) clearFocus();
+  activeFilter = tier;
+
+  // update button styles
+  Object.entries(FB_IDS).forEach(([t, id]) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const isActive = String(t) === String(tier);
+    if (isActive) {
+      btn.classList.add('fb-active');
+      const dot = btn.querySelector('.fb-dot');
+      const bg = dot ? dot.style.background : 'var(--muted)';
+      btn.style.background = bg;
+      btn.style.color = bg === 'var(--surface)' || tier === 'all' ? 'var(--text)' : '#0a0b0f';
+      btn.style.borderColor = 'transparent';
+    } else {
+      btn.classList.remove('fb-active');
+      btn.style.background = 'var(--surface2)';
+      btn.style.color = 'var(--muted)';
+      btn.style.borderColor = 'var(--border)';
+    }
+  });
+
+  // show/hide nodes by tier
+  // We track tier via nodeReg — need to look up tier from tierNodes
+  // Build reverse map: node marker → tier
+  const markerTierMap = new WeakMap();
+  // OEM tier = 0
+  Object.entries(nodeReg).forEach(([k, n]) => {
+    if (!n?.marker) return;
+    // check which tier this node belongs to
+    let nodeTier = 0; // default OEM
+    for (let t = 1; t <= 4; t++) {
+      if (tierNodes[t] && tierNodes[t].includes(n)) { nodeTier = t; break; }
+    }
+    markerTierMap.set(n.marker, nodeTier);
+  });
+
+  Object.entries(nodeReg).forEach(([k, n]) => {
+    if (!n?.marker) return;
+    const nodeTier = markerTierMap.get(n.marker) ?? 0;
+    const show = tier === 'all' || nodeTier === tier;
+    n.marker.setStyle({ fillOpacity: show ? 0.9 : 0.04, opacity: show ? 1 : 0.04 });
+  });
+
+  // show/hide lines
+  edgeReg.forEach(e => {
+    // Lines connect tier N to tier N-1; show if either endpoint tier matches
+    // We approximate: show lines when 'all', or dim them when filtering
+    if (tier === 'all') {
+      e.line.setStyle({ opacity: 0.65, weight: 2 });
+      if (e.decorator) {
+        const el = e.decorator.getElement ? e.decorator.getElement() : null;
+        if (el) el.style.opacity = '';
+      }
+    } else {
+      // Show lines that connect to visible nodes
+      const fromNode = nodeReg[e.fromKey];
+      const toNode   = nodeReg[e.toKey];
+      const fromTier = fromNode ? (markerTierMap.get(fromNode.marker) ?? 0) : -1;
+      const toTier   = toNode   ? (markerTierMap.get(toNode.marker)   ?? 0) : -1;
+      const show = fromTier === tier || toTier === tier;
+      e.line.setStyle({ opacity: show ? 0.65 : 0.03, weight: show ? 2 : 0.5 });
+      if (e.decorator) {
+        const el = e.decorator.getElement ? e.decorator.getElement() : null;
+        if (el) el.style.opacity = show ? '' : '0';
+      }
+    }
+  });
 }
 
 // ── tab switching ─────────────────────────────────────────────────────────────
@@ -556,7 +744,9 @@ function renderProduct(p) {
     const node = addNode(p.lat, p.lng, p.product_name, '#ffffff', 0, popup, false);
     if (node) {
       oemMarker = node;
-      nodeReg[(p.oem_manufacturer||p.product_name).toLowerCase()] = node;
+      const oemKey = (p.oem_manufacturer||p.product_name).toLowerCase();
+      node.key = oemKey;
+      nodeReg[oemKey] = node;
     }
   }
 }
@@ -592,7 +782,11 @@ function renderOEMs(oems) {
       const existingNode = nodeReg[oem.company_name.toLowerCase()];
       const node = existingNode || addNode(oem.lat, oem.lng, oem.company_name, '#d50c0c', 0, popup, i > 0);
       if (node) {
-        if (!existingNode) nodeReg[oem.company_name.toLowerCase()] = node;
+        if (!existingNode) {
+          const ok = oem.company_name.toLowerCase();
+          node.key = ok;
+          nodeReg[ok] = node;
+        }
         if (i === 0) oemMarker = node;
         const intensity = oem.market_share==='high' ? 1.0 : oem.market_share==='medium' ? 0.6 : 0.3;
         addHeatPoint('oem', node.lat, node.lng, intensity);
@@ -601,6 +795,9 @@ function renderOEMs(oems) {
     const msClass = oem.market_share==='high' ? 'ms-high' : oem.market_share==='medium' ? 'ms-medium' : 'ms-low';
     const confClass = oem.confidence==='high' ? 'ch' : oem.confidence==='medium' ? 'cm' : 'cl';
     const confLabel = oem.confidence || 'unknown';
+    const msPct    = oem.market_share_pct && oem.market_share_pct !== 'unknown' ? oem.market_share_pct : null;
+    const msSource = oem.market_share_source && oem.market_share_source !== 'unknown' ? oem.market_share_source : null;
+    const msRank   = oem.market_rank && oem.market_rank !== 99 ? '#' + oem.market_rank : null;
     const card = document.createElement('div');
     card.className = 'oem-card';
     card.style.cssText = `opacity:0;animation:slideUp .4s ease ${i*.07}s forwards`;
@@ -611,6 +808,13 @@ function renderOEMs(oems) {
       <div class="oem-country">📍 ${oem.country||'—'}</div>
       <div class="oem-role">${oem.role||'OEM'}</div>
       ${oem.notes ? `<div class="oem-notes">${oem.notes}</div>` : ''}
+      ${msRank ? `<span style="font-size:.6rem;color:var(--muted)">${msRank} </span>` : ''}
+      ${msPct ? `
+        <div style="margin-top:8px;padding:6px 8px;background:rgba(255,200,84,.07);border:1px solid rgba(255,200,84,.2);border-radius:3px">
+          <div style="font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;color:var(--accent4);margin-bottom:3px">Market Share</div>
+          <div style="font-size:.78rem;font-family:'Syne',sans-serif;font-weight:700;color:var(--text1)">${msPct}</div>
+          ${msSource ? `<div style="font-size:.58rem;color:var(--muted);margin-top:2px">Source: ${msSource}</div>` : ''}
+        </div>` : ''}
       <div style="display:flex;align-items:center;gap:6px;margin-top:8px;padding-top:7px;border-top:1px solid var(--border)">
         <span class="cdot ${confClass}" title="Confidence: ${confLabel}"></span>
         <span style="font-size:.62rem;color:var(--muted)">Confidence: <strong style="color:var(--text)">${confLabel}</strong></span>
@@ -644,14 +848,19 @@ function renderTierMap(tierNum, suppliers) {
     const existingNode = nodeReg[s.company_name.toLowerCase()];
     const node = existingNode || addNode(s.lat, s.lng, s.company_name, color, tierNum, popup);
     if (node) {
-      if (!existingNode) nodeReg[s.company_name.toLowerCase()] = node;
-      //nodeReg[s.company_name.toLowerCase()] = node;
+      // store key on node for reliable edge lookup
+      const childKey = s.company_name.toLowerCase();
+      if (!existingNode) {
+        node.key = childKey;
+        nodeReg[childKey] = node;
+      }
       tierNodes[tierNum].push(node);
       // Heatmap
       const hKey = 'tier_'+tierNum;
       const hInt = s.confidence==='high' ? 1.0 : s.confidence==='medium' ? 0.6 : 0.3;
       addHeatPoint(hKey, node.lat, node.lng, hInt);
 
+      // find parent node
       let parentNode = findParentNode(s.supplies_to);
       if (!parentNode && tierNum===1) parentNode = nodeReg[s.oem_root?.toLowerCase()] || oemMarker;
       if (!parentNode && tierNum>1 && tierNodes[tierNum-1]?.length>0) {
@@ -663,9 +872,11 @@ function renderTierMap(tierNum, suppliers) {
         parentNode = best;
       }
       if (parentNode) {
-        const parentKey = Object.keys(nodeReg).find(k => nodeReg[k] === parentNode) || '';
-        drawLine(parentNode.lat, parentNode.lng, node.lat, node.lng, color, s.company_name.toLowerCase(), parentKey);
-
+        // use .key stored on parent node — no object identity search
+        const parentKey = parentNode.key || '';
+        if (parentKey && parentKey !== childKey) {
+          drawLine(parentNode.lat, parentNode.lng, node.lat, node.lng, color, parentKey, childKey);
+        }
       }
     }
   });
@@ -745,13 +956,11 @@ function updateStats(sc) {
   let total=0, countries=new Set();
   Object.values(sc.tiers||{}).forEach(arr=>arr.forEach(s=>{total++;if(s.country)countries.add(s.country);}));
   document.getElementById('mapStats').innerHTML=`
-    <div class="stat"><strong>${sc.product.product_name}</strong>Product Name</div>
+    <div class="stat"><strong>${sc.product?.product_name||'—'}</strong>Product Name</div>
     <div class="stat"><strong>${total}</strong>Total Suppliers</div>
     <div class="stat"><strong>${countries.size}</strong>Countries</div>
     <div class="stat"><strong>${Object.keys(sc.tiers||{}).length}</strong>Tier Depth</div>
-    <div class="stat"><strong>${Object.keys(nodeReg).length}</strong>Mapped Nodes</div>
-    <div class="stat"><strong>${new Date().toLocaleDateString()}</strong>Date</div>
-    <div class="stat"><strong>${new Date().toLocaleTimeString()}</strong>Time</div>`;
+    <div class="stat"><strong>${Object.keys(nodeReg).length}</strong>Mapped Nodes</div>`;
 }
 
 // ── reset ─────────────────────────────────────────────────────────────────────
@@ -765,12 +974,19 @@ function reset() {
   document.getElementById('emptyStateList').style.display='';
   document.getElementById('mapContainer').style.display='none';
   document.getElementById('mapStats').innerHTML='';
+  document.getElementById('tierFilter').classList.remove('visible');
+  activeFilter='all';
   document.getElementById('downloadBar').classList.remove('visible');
   document.getElementById('btnPdf').disabled=true;
   document.getElementById('btnWord').disabled=true;
+  document.getElementById('btnExcel').disabled=true;
   document.getElementById('oemSection').classList.remove('visible');
   document.getElementById('oemGrid').innerHTML='';
   lastSupplyChain = null;
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  const tv = document.getElementById('timerValue'); if(tv){ tv.textContent='0.0s'; tv.style.color='var(--muted)'; }
+  const td = document.getElementById('timerDisplay'); if(td) td.style.display='none';
+  resetAllProviderStatus();
   initMap();
 }
 
@@ -799,6 +1015,33 @@ async function downloadReport(format) {
   finally { btn.disabled=false; btn.innerHTML=origText; }
 }
 
+// ── excel export ──────────────────────────────────────────────────────────────
+async function exportExcel() {
+  if (!lastSupplyChain) return;
+  const btn = document.getElementById('btnExcel');
+  const origText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Generating…';
+  try {
+    const depth = Object.keys(lastSupplyChain.tiers || {}).length || 1;
+    const product = lastSupplyChain.product?.product_name || 'supply_chain';
+    const resp = await fetch(`${BACKEND}/api/export/excel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supply_chain: lastSupplyChain, product_input: product, depth })
+    });
+    if (!resp.ok) { const err = await resp.json(); alert('Export failed: ' + (err.error || 'Unknown error')); return; }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${product.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40)}_supply_chain.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { alert('Export failed: ' + e.message); }
+  finally { btn.disabled = false; btn.innerHTML = origText; }
+}
+
 // ── load providers ────────────────────────────────────────────────────────────
 async function loadProviders() {
   try {
@@ -810,7 +1053,7 @@ async function loadProviders() {
     let firstOk=null;
     providers.forEach(p => {
       const dot = p.configured?'ok':'err';
-      bar.innerHTML+=`<div class="provider-badge"><div class="pb-dot ${dot}"></div><strong>${p.name}</strong><span style="color:var(--muted)">${p.configured?'ready':'no key'}</span></div>`;
+      bar.innerHTML+=`<div class="provider-badge" id="pb-${p.id}"><div class="pb-dot ${dot}" id="pb-dot-${p.id}"></div><strong>${p.name}</strong> <span id="pb-status-${p.id}" style="color:var(--muted)">${p.configured?'ready':'no key'}</span></div>`;
       const opt=document.createElement('option');
       opt.value=p.id; opt.textContent=(p.configured?'✅':'❌')+' '+p.name; opt.disabled=!p.configured;
       if(p.configured&&!firstOk) firstOk=p.id;
@@ -1108,6 +1351,58 @@ function openSupplierModal(tierNum, companyName) {
 
 
 // ── main ──────────────────────────────────────────────────────────────────────
+// ── Search timer ─────────────────────────────────────────────────────────────
+let timerInterval = null;
+let timerStart = null;
+
+function startTimer() {
+  timerStart = Date.now();
+  const disp = document.getElementById('timerDisplay');
+  const val  = document.getElementById('timerValue');
+  if (disp) disp.style.display = 'block';
+  if (val)  { val.textContent = '0.0s'; val.style.color = 'var(--muted)'; }
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    const elapsed = ((Date.now() - timerStart) / 1000).toFixed(1);
+    if (val) val.textContent = elapsed + 's';
+  }, 100);
+}
+
+function stopTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  if (!timerStart) return;
+  const elapsed = ((Date.now() - timerStart) / 1000).toFixed(1);
+  const val = document.getElementById('timerValue');
+  if (val) { val.textContent = elapsed + 's ✓'; val.style.color = 'var(--ok)'; }
+}
+
+// ── Provider status helpers ───────────────────────────────────────────────────
+function setProviderStatus(providerId, status) {
+  const statusEl = document.getElementById('pb-status-' + providerId);
+  const dotEl    = document.getElementById('pb-dot-' + providerId);
+  if (!statusEl || !dotEl) return;
+  if (status === 'working') {
+    statusEl.textContent = 'working';
+    statusEl.style.color = 'var(--accent1)';
+    dotEl.style.background = 'var(--accent1)';
+    dotEl.style.boxShadow = '0 0 6px var(--accent1)';
+  } else if (status === 'done') {
+    statusEl.textContent = 'done ✓';
+    statusEl.style.color = 'var(--ok)';
+    dotEl.style.background = 'var(--ok)';
+    dotEl.style.boxShadow = 'none';
+  } else {
+    statusEl.textContent = 'ready';
+    statusEl.style.color = 'var(--muted)';
+    dotEl.style.background = 'var(--ok)';
+    dotEl.style.boxShadow = 'none';
+  }
+}
+
+function resetAllProviderStatus() {
+  ['anthropic','openai','gemini','deepseek'].forEach(id => setProviderStatus(id, 'ready'));
+}
+
 function startMapping() {
   const product = document.getElementById('productInput').value.trim();
   const depth = parseInt(document.getElementById('depthSelect').value);
@@ -1116,10 +1411,13 @@ function startMapping() {
   reset();
   const btn=document.getElementById('mapBtn');
   btn.disabled=true; btn.innerHTML='<span class="spinner"></span>MAPPING…';
-  appendLog(`⚡ Mapping: "${product}" (depth: ${depth})`);
-  // if make new dropdown option for all models, keep this and make if else block, calling respective API based on value
+  document.getElementById('agenticBtn').disabled=true;
+  // declare provider FIRST before any usage
   const provider=document.getElementById('providerSelect').value;
   const isAll = provider === "all";
+  appendLog(`⚡ Mapping: "${product}" (depth: ${depth})`);
+  startTimer();
+  if (provider !== 'all') setProviderStatus(provider, 'working');
   if (isAll) evtSrc = new EventSource(`${BACKEND}/api/map_all?product=${encodeURIComponent(product)}&depth=${depth}`);
   else evtSrc=new EventSource(`${BACKEND}/api/map?product=${encodeURIComponent(product)}&depth=${depth}&provider=${provider}`);
   let activeProviderName = null;
@@ -1130,9 +1428,11 @@ function startMapping() {
       else if (d.type === 'provider_start') {
         activeProviderName = d.name;
         appendLog(d.message);
+        setProviderStatus(d.name, 'working');
       }
       else if (d.type === 'provider_done') {
         appendLog(d.message);
+        if (activeProviderName) setProviderStatus(activeProviderName, 'done');
       }
       else if (d.type==='oem_discovered') {
         renderOEMs(d.oems);
@@ -1149,7 +1449,9 @@ function startMapping() {
         document.getElementById('downloadBar').classList.add('visible');
         document.getElementById('btnPdf').disabled=false;
         document.getElementById('btnWord').disabled=false;
+        document.getElementById('btnExcel').disabled=false;
         document.getElementById('heatControls').style.display='block';
+        document.getElementById('tierFilter').classList.add('visible');
       }
       else if (d.type==='complete') {
         const provName = activeProviderName || provider;
@@ -1161,8 +1463,9 @@ function startMapping() {
         document.getElementById('downloadBar').classList.add('visible');
         document.getElementById('btnPdf').disabled=false;
         document.getElementById('btnWord').disabled=false;
+        document.getElementById('btnExcel').disabled=false;
         document.getElementById('heatControls').style.display='block';
-        
+        document.getElementById('tierFilter').classList.add('visible');
       }
       else if (d.type==='error') { appendLog(`❌ ${d.message}`,false); done(); }
       else if (d.type==='stream_end') {
@@ -1187,7 +1490,78 @@ function startMapping() {
     } catch(err){console.error(err);}
   };
   evtSrc.onerror=()=>{ appendLog('❌ Connection lost. Is app.py running on port 5000?',false); done(); };
-  function done(){ btn.disabled=false; btn.innerHTML='▶ MAP CHAIN'; if(evtSrc){evtSrc.close();evtSrc=null;} }
+  const done = () => {
+    btn.disabled=false;
+    btn.innerHTML='▶ MAP CHAIN';
+    document.getElementById('agenticBtn').disabled=false;
+    if(evtSrc){evtSrc.close();evtSrc=null;}
+    stopTimer();
+    const _p = document.getElementById('providerSelect').value;
+    if (_p && _p !== 'all') setProviderStatus(_p, 'done');
+  };
+}
+
+function startAgenticMapping() {
+  const product = document.getElementById('productInput').value.trim();
+  const depth   = parseInt(document.getElementById('depthSelect').value);
+  if (!product) { document.getElementById('productInput').focus(); return; }
+  if (evtSrc) { evtSrc.close(); evtSrc = null; }
+  reset();
+  const btn    = document.getElementById('agenticBtn');
+  const mapBtn = document.getElementById('mapBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>MAPPING…';
+  mapBtn.disabled = true;
+  appendLog(`⚡ Agentic Mapping: "${product}" (depth: ${depth}) — Gemini (non-China) + DeepSeek (China)`);
+  startTimer();
+  evtSrc = new EventSource(`${BACKEND}/api/map_agentic?product=${encodeURIComponent(product)}&depth=${depth}`);
+  evtSrc.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'status') appendLog(d.message);
+      else if (d.type === 'oem_discovered') renderOEMs(d.oems);
+      else if (d.type === 'product_identified') {
+        if (!document.getElementById('productCard').classList.contains('visible')) renderProduct(d.product);
+      }
+      else if (d.type === 'tier_complete') {
+        renderTierMap(d.tier, d.suppliers);
+        renderTierList(d.tier, d.suppliers);
+        document.getElementById('downloadBar').classList.add('visible');
+        document.getElementById('btnPdf').disabled = false;
+        document.getElementById('btnWord').disabled = false;
+        document.getElementById('btnExcel').disabled = false;
+        document.getElementById('heatControls').style.display = 'block';
+        document.getElementById('tierFilter').classList.add('visible');
+      }
+      else if (d.type === 'complete') {
+        lastSupplyChain = mergeSupplyChains(lastSupplyChain, d.supply_chain, 'agentic');
+        if (d.supply_chain?.summary) {
+          document.getElementById('summaryText').textContent = lastSupplyChain.summary;
+          document.getElementById('summaryBlock').classList.add('visible');
+        }
+        updateStats(lastSupplyChain);
+        fitBounds();
+        document.getElementById('downloadBar').classList.add('visible');
+        document.getElementById('btnPdf').disabled = false;
+        document.getElementById('btnWord').disabled = false;
+        document.getElementById('btnExcel').disabled = false;
+        document.getElementById('heatControls').style.display = 'block';
+        document.getElementById('tierFilter').classList.add('visible');
+      }
+      else if (d.type === 'error') { appendLog(`❌ ${d.message}`, false); done(); }
+      else if (d.type === 'stream_end') {
+        appendLog('✅ Agentic mapping complete! Use the download buttons to export results.', false);
+        done();
+        evtSrc.close();
+      }
+    } catch(err) { console.error(err); }
+  };
+  evtSrc.onerror = () => { appendLog('❌ Connection lost. Is app.py running on port 5000?', false); done(); };
+  const done = () => {
+    btn.disabled = false; btn.innerHTML = '⚡ MAP AGENTIC';
+    mapBtn.disabled = false;
+    if (evtSrc) { evtSrc.close(); evtSrc = null; }
+    stopTimer();
+  };
 }
 
 // event listener for enter

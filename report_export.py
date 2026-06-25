@@ -203,6 +203,50 @@ def export_docx():
             set_cell_bg(stbl.rows[i].cells[0], bg)
             set_cell_bg(stbl.rows[i].cells[1], bg)
 
+        regulatory = data.get("regulatory", [])
+        if regulatory:
+            doc.add_paragraph()
+            doc.add_heading("6. Regulatory Approval Status", level=1)
+            REG_STATUS_BG = {
+                "approved":   "E8F5E9",
+                "registered": "E8F5E9",
+                "pending":    "FFF8E1",
+                "not found":  "FFEBEE",
+                "unknown":    "F5F5F5",
+            }
+            for oem_entry in regulatory:
+                h = doc.add_heading(oem_entry.get("company_name", "—"), level=2)
+                h.runs[0].font.color.rgb = RGBColor(0x2B, 0x7F, 0xCC)
+                country_para = doc.add_paragraph(f"Country: {oem_entry.get('country', '—')}")
+                country_para.runs[0].font.size = Pt(9)
+                bodies = oem_entry.get("regulatory_bodies", [])
+                if bodies:
+                    reg_headers = ["Body", "Region", "Status", "Details", "Confidence"]
+                    reg_widths  = [Inches(0.7), Inches(1.0), Inches(0.9), Inches(3.2), Inches(0.8)]
+                    rtbl = doc.add_table(rows=len(bodies) + 1, cols=5)
+                    rtbl.style = "Table Grid"
+                    hrow = rtbl.rows[0]
+                    for ci, (hdr, w) in enumerate(zip(reg_headers, reg_widths)):
+                        hrow.cells[ci].width = w
+                        add_cell_text(hrow.cells[ci], hdr, bold=True, size=9, color=RGBColor(0xFF, 0xFF, 0xFF))
+                        set_cell_bg(hrow.cells[ci], "1A1A2E")
+                    for ri, body in enumerate(bodies, 1):
+                        status = (body.get("status") or "unknown").lower()
+                        status_bg = REG_STATUS_BG.get(status, "F5F5F5")
+                        drow = rtbl.rows[ri]
+                        vals = [
+                            body.get("body", "—"),
+                            body.get("country", "—"),
+                            status.title(),
+                            body.get("details", "—") or "—",
+                            body.get("confidence", "—"),
+                        ]
+                        for ci, (val, w) in enumerate(zip(vals, reg_widths)):
+                            drow.cells[ci].width = w
+                            add_cell_text(drow.cells[ci], val, bold=(ci == 2), size=9)
+                            set_cell_bg(drow.cells[ci], status_bg if ci == 2 else "FFFFFF")
+                doc.add_paragraph()
+
         buf = io.BytesIO()
         doc.save(buf)
         buf.seek(0)

@@ -37,7 +37,67 @@ def _merge_dedup(gemini_results: list, deepseek_results: list) -> list:
     return merged
 
 
-def run_pipeline(product_input: str, depth: int, provider: str, queue: list, oem_context: list, collected_tiers: dict):
+# ── Pharmaceutical regulatory research ────────────────────────────────────────
+
+REGULATORY_BODIES = [
+    {"id": "FDA",  "full": "Food and Drug Administration",                        "country": "USA"},
+    {"id": "EMA",  "full": "European Medicines Agency",                           "country": "EU"},
+    {"id": "TGA",  "full": "Therapeutic Goods Administration",                    "country": "Australia"},
+    {"id": "HSA",  "full": "Health Sciences Authority",                           "country": "Singapore"},
+    {"id": "PMDA", "full": "Pharmaceuticals and Medical Devices Agency",          "country": "Japan"},
+    {"id": "MHRA", "full": "Medicines and Healthcare products Regulatory Agency", "country": "UK"},
+    {"id": "NMPA", "full": "National Medical Products Administration",            "country": "China"},
+]
+
+
+def research_regulatory_status(oem_name: str, product_name: str, provider: str) -> list:
+    """
+    Research regulatory approval status for oem_name's product across 7 bodies.
+    Returns a list of 7 dicts. Never raises — returns 'unknown' on any failure.
+    """
+    _default = [
+        {"body": b["id"], "full_name": b["full"], "country": b["country"],
+         "status": "unknown", "details": "", "confidence": "low"}
+        for b in REGULATORY_BODIES
+    ]
+    try:
+        query = (
+            f"{oem_name} {product_name} "
+            "FDA EMA TGA HSA PMDA MHRA NMPA regulatory approval registration"
+        )
+        evidence = get_evidence(query, provider)
+        evidence_text = (
+            f"Web research:\n{evidence}" if evidence and evidence.strip()
+            else "No live search available — use your training knowledge."
+        )
+        body_list = "\n".join(
+            f"- {b['id']} ({b['full']}, {b['country']})" for b in REGULATORY_BODIES
+        )
+        prompt = f"""You are a pharmaceutical regulatory research assistant.
+
+Company: {oem_name}
+Product: {product_name}
+
+{evidence_text}
+
+For each regulatory body below, classify this company's approval/registration status for the product:
+{body_list}
+
+Status must be exactly one of: approved | registered | pending | not found | unknown
+
+Return ONLY a JSON array with exactly 7 objects in this order (FDA, EMA, TGA, HSA, PMDA, MHRA, NMPA):
+[{{"body":"FDA","full_name":"Food and Drug Administration","country":"USA","status":"...","details":"brief note or empty string","confidence":"high|medium|low"}}, ...]"""
+
+        raw = call_ai(prompt, provider, max_tokens=700)
+        parsed = safe_parse_json(raw)
+        if isinstance(parsed, list) and len(parsed) == 7:
+            return parsed
+        return _default
+    except Exception:
+        return _default
+
+
+def run_pipeline(product_input: str, depth: int, provider: str, queue: list, oem_context: list, collected_tiers: dict, is_pharma: bool = False):
     def push(t, **kw): queue.append({"type": t, **kw})
 
     search_label = "Google Search" if provider == "gemini" else "DuckDuckGo"
@@ -296,7 +356,25 @@ Rank 1=largest. Only include companies from the known OEMs list."""
     push("oem_discovered", oems=oem_list)
     push("status", message=f"✅ Found {len(oem_list)} OEM manufacturer(s)")
 
-    supply_chain = {"product": product_info, "oems": oem_list, "tiers": {}}
+    regulatory_by_oem = []
+    if is_pharma and oem_list:
+        pname = product_info.get("product_name", product_input)
+        push("status", message="💊 Researching regulatory approvals…")
+        for oem in oem_list:
+            oem_name = oem.get("company_name", "")
+            if not oem_name or oem_name.lower() in ("unknown", ""):
+                continue
+            push("status", message=f"  🔍 Checking regulatory status for {oem_name}…")
+            results = research_regulatory_status(oem_name, pname, provider)
+            regulatory_by_oem.append({
+                "company_name": oem_name,
+                "country": oem.get("country", ""),
+                "regulatory_bodies": results,
+            })
+        push("regulatory_found", regulatory=regulatory_by_oem)
+        push("status", message=f"✅ Regulatory research complete for {len(regulatory_by_oem)} OEM(s)")
+
+    supply_chain = {"product": product_info, "oems": oem_list, "tiers": {}, "regulatory": regulatory_by_oem}
 
     oem_names = [
         {"name": o.get("company_name", ""), "confidence": o.get("confidence", "")}
@@ -562,7 +640,7 @@ Reply ONLY with a JSON object:
         }
 
 
-def run_agentic_pipeline(product_input: str, depth: int, queue: list, oem_context: list, collected_tiers: dict):
+def run_agentic_pipeline(product_input: str, depth: int, queue: list, oem_context: list, collected_tiers: dict, is_pharma: bool = False):
     """
     Dual-model agentic pipeline.
     - Gemini   → non-China companies at every level
@@ -771,7 +849,25 @@ List 2–8 significant OEMs as SEPARATE array elements."""
     push("oem_discovered", oems=oem_list)
     push("status", message=f"✅ Found {len(oem_list)} OEM manufacturer(s)")
 
-    supply_chain = {"product": product_info, "oems": oem_list, "tiers": {}}
+    regulatory_by_oem = []
+    if is_pharma and oem_list:
+        pname = product_info.get("product_name", product_input)
+        push("status", message="💊 Researching regulatory approvals (Gemini)…")
+        for oem in oem_list:
+            oem_name = oem.get("company_name", "")
+            if not oem_name or oem_name.lower() in ("unknown", ""):
+                continue
+            push("status", message=f"  🔍 Checking regulatory status for {oem_name}…")
+            results = research_regulatory_status(oem_name, pname, "gemini")
+            regulatory_by_oem.append({
+                "company_name": oem_name,
+                "country": oem.get("country", ""),
+                "regulatory_bodies": results,
+            })
+        push("regulatory_found", regulatory=regulatory_by_oem)
+        push("status", message=f"✅ Regulatory research complete for {len(regulatory_by_oem)} OEM(s)")
+
+    supply_chain = {"product": product_info, "oems": oem_list, "tiers": {}, "regulatory": regulatory_by_oem}
 
     oem_names = [
         {"name": o.get("company_name", ""), "confidence": o.get("confidence", "")}

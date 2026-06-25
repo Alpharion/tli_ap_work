@@ -78,9 +78,10 @@ def get_providers():
 
 @app.route("/api/map")
 def map_suppliers():
-    product  = request.args.get("product", "").strip()
-    depth    = max(0, min(int(request.args.get("depth", 2)), 3))
-    provider = request.args.get("provider", "gemini").strip().lower()
+    product   = request.args.get("product", "").strip()
+    depth     = max(0, min(int(request.args.get("depth", 2)), 3))
+    provider  = request.args.get("provider", "gemini").strip().lower()
+    is_pharma = request.args.get("is_pharma", "false").lower() == "true"
 
     if not product:
         return jsonify({"error": "product required"}), 400
@@ -90,7 +91,7 @@ def map_suppliers():
     queue, done = [], threading.Event()
 
     def run():
-        try: run_pipeline(product, depth, provider, queue, [], {})
+        try: run_pipeline(product, depth, provider, queue, [], {}, is_pharma=is_pharma)
         except Exception as e: queue.append({"type": "error", "message": str(e)})
         finally: done.set()
 
@@ -118,6 +119,7 @@ def map_all():
     providers = available_providers()
     product   = request.args.get("product", "").strip()
     depth     = max(0, min(int(request.args.get("depth", 2)), 3))
+    is_pharma = request.args.get("is_pharma", "false").lower() == "true"
 
     if not product:
         return jsonify({"error": "product required"}), 400
@@ -134,7 +136,7 @@ def map_all():
                     provider_id = provider.get("id")
                     queue.append({"type": "provider_start", "provider": provider["id"], "name": provider["name"],
                                   "message": f"Starting Pipeline with {provider['name']}"})
-                    run_pipeline(product, depth, provider_id, queue, collected_oems, collected_tiers)
+                    run_pipeline(product, depth, provider_id, queue, collected_oems, collected_tiers, is_pharma=is_pharma)
                     queue.append({"type": "provider_done", "provider": provider["id"], "name": provider["name"],
                                   "message": f"{provider['name']} pipeline complete."})
             queue.append({"type": "status", "message": "✅ Completed series of pipeline executions."})
@@ -162,8 +164,9 @@ def map_all():
 
 @app.route("/api/map_agentic")
 def map_agentic():
-    product = request.args.get("product", "").strip()
-    depth   = max(0, min(int(request.args.get("depth", 2)), 3))
+    product   = request.args.get("product", "").strip()
+    depth     = max(0, min(int(request.args.get("depth", 2)), 3))
+    is_pharma = request.args.get("is_pharma", "false").lower() == "true"
 
     if not product:
         return jsonify({"error": "product required"}), 400
@@ -171,7 +174,7 @@ def map_agentic():
     queue, done = [], threading.Event()
 
     def run():
-        try: run_agentic_pipeline(product, depth, queue, [], {})
+        try: run_agentic_pipeline(product, depth, queue, [], {}, is_pharma=is_pharma)
         except Exception as e: queue.append({"type": "error", "message": str(e)})
         finally: done.set()
 

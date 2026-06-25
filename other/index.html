@@ -51,9 +51,6 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .btn-map{background:var(--accent1);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
 .btn-map:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(232,255,71,.3)}
 .btn-map:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
-.btn-agentic{background:var(--accent2);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
-.btn-agentic:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(71,200,255,.3)}
-.btn-agentic:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
 
 /* log */
 .status-log{background:var(--bg1);border:1px solid var(--border);border-radius:3px;padding:14px;margin-top:18px;max-height:130px;overflow-y:auto;display:none}
@@ -185,8 +182,8 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .btn-dl.pdf:hover{box-shadow:0 4px 16px rgba(255,107,71,.3)}
 .btn-dl.word{background:transparent;color:#47c8ff;border-color:#47c8ff}
 .btn-dl.word:hover{box-shadow:0 4px 16px rgba(71,200,255,.3)}
-.btn-dl.excel{background:transparent;color:#4ade80;border-color:#4ade80}
-.btn-dl.excel:hover{box-shadow:0 4px 16px rgba(74,222,128,.3)}
+.btn-dl.xlsx{background:transparent;color:#4ade80;border-color:#4ade80}
+.btn-dl.xlsx:hover{box-shadow:0 4px 16px rgba(74,222,128,.3)}
 .dl-label{font-size:.65rem;color:var(--muted1)}
  
 
@@ -205,29 +202,29 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
   animation: dash-flow 1.8s linear infinite;
 }
 @keyframes dash-flow {
-  from { stroke-dashoffset: 42; }
-  to   { stroke-dashoffset: 0; }
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: 42; }
 }
 .spinner{display:inline-block;width:13px;height:13px;border:2px solid rgba(232,255,71,.2);border-top-color:var(--accent1);border-radius:50%;animation:spin .7s linear infinite;margin-right:7px;vertical-align:middle}
 @keyframes spin{to{transform:rotate(360deg)}}
 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-/* ── Pharmaceutical / Regulatory ───────────────────────────────────────────── */
-.pharma-check{display:flex;align-items:center;gap:9px;margin-top:10px;padding:9px 12px;background:rgba(167,139,250,.07);border:1px solid rgba(167,139,250,.2);border-radius:3px;cursor:pointer;user-select:none}
-.pharma-check input{accent-color:#a78bfa;width:14px;height:14px;cursor:pointer;flex-shrink:0}
-.pharma-check span{font-size:.72rem;color:var(--muted);line-height:1.5}
-.reg-section{background:var(--surface);border:1px solid var(--border);border-left:3px solid #a78bfa;border-radius:4px;padding:18px 22px;margin-bottom:20px;animation:slideUp .4s ease}
-.reg-label{font-size:.58rem;letter-spacing:.15em;text-transform:uppercase;color:#a78bfa;margin-bottom:14px;border-bottom:1px solid rgba(167,139,250,.2);padding-bottom:7px}
+
+/* regulatory section */
+.reg-section{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent2);border-radius:4px;padding:18px 22px;margin-bottom:20px;display:none;animation:slideUp .4s ease}
+.reg-section.visible{display:block}
+.reg-label{font-size:.58rem;letter-spacing:.15em;text-transform:uppercase;color:var(--accent2);margin-bottom:14px}
 .reg-oem-block{margin-bottom:22px}
-.reg-oem-name{font-family:'Syne',sans-serif;font-weight:700;font-size:.88rem;color:var(--text1);margin-bottom:2px}
-.reg-oem-country{font-size:.63rem;color:var(--muted);margin-bottom:9px}
+.reg-oem-name{font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;margin-bottom:2px;color:var(--text1)}
+.reg-oem-country{font-size:.65rem;color:var(--muted);margin-bottom:10px}
 .reg-table{width:100%;border-collapse:collapse;font-size:.72rem}
-.reg-table th{text-align:left;padding:7px 10px;background:var(--surface2);color:var(--muted);font-size:.6rem;letter-spacing:.1em;font-family:'Space Mono',monospace;border-bottom:1px solid var(--border)}
-.reg-table td{padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);color:var(--text)}
-.reg-status{display:inline-block;padding:2px 8px;border-radius:2px;font-size:.65rem;font-family:'Space Mono',monospace;font-weight:700;letter-spacing:.05em}
-.rs-approved,.rs-registered{background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
-.rs-pending{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.3)}
-.rs-not-found{background:rgba(239,68,68,.12);color:#f87171;border:1px solid rgba(239,68,68,.25)}
-.rs-unknown{background:rgba(148,163,184,.1);color:var(--muted);border:1px solid var(--border)}
+.reg-table th{background:#1a237e;color:#fff;padding:6px 10px;text-align:left;font-size:.65rem;letter-spacing:.07em;text-transform:uppercase}
+.reg-table td{padding:6px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+.reg-table tr:nth-child(even) td{background:rgba(255,255,255,.03)}
+.reg-status{display:inline-block;padding:1px 8px;border-radius:2px;font-size:.63rem;font-weight:700;border:1px solid}
+.rs-approved,.rs-registered{color:#4ade80;border-color:#4ade80}
+.rs-pending{color:var(--accent4);border-color:var(--accent4)}
+.rs-not-found{color:var(--accent3);border-color:var(--accent3)}
+.rs-unknown{color:var(--muted);border-color:var(--muted)}
 </style>
 </head>
 <body>
@@ -277,12 +274,13 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
         </select>
       </div>
       <button class="btn-map" id="mapBtn" onclick="startMapping()">▶ MAP CHAIN</button>
-      <button class="btn-agentic" id="agenticBtn" onclick="startAgenticMapping()">⚡ MAP AGENTIC</button>
     </div>
-    <label class="pharma-check">
-      <input type="checkbox" id="isPharmaCheck">
-      <span>💊 This is a <strong style="color:#a78bfa">pharmaceutical product</strong> — search regulatory approvals (FDA, EMA, TGA, HSA, PMDA, MHRA, NMPA)</span>
-    </label>
+    <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.72rem;color:var(--muted1);user-select:none">
+        <input type="checkbox" id="isPharmaCheck" style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex-shrink:0">
+        <span>💊 This is a <strong style="color:var(--accent2)">pharmaceutical product</strong> — search regulatory approvals (FDA, EMA, TGA, HSA, PMDA, MHRA, NMPA)</span>
+      </label>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px">
     <div id="providerStatus" style="display:flex;gap:10px;flex-wrap:wrap"></div>
     <div id="timerDisplay" style="font-family:'Space Mono',monospace;font-size:.7rem;color:var(--muted);display:none">
@@ -312,9 +310,9 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
   </div>
 </div>
 
-  <!-- Regulatory Section (pharma mode only) -->
-  <div class="reg-section" id="regSection" style="display:none">
-    <div class="reg-label">Regulatory Approval Status</div>
+  <!-- Regulatory Section (pharma only) -->
+  <div class="reg-section" id="regSection">
+    <div class="reg-label">💊 Pharmaceutical Regulatory Approvals — by OEM</div>
     <div id="regContent"></div>
   </div>
 
@@ -323,7 +321,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
     <span class="dl-label">Download results:</span>
     <button class="btn-dl pdf" id="btnPdf" onclick="downloadReport('pdf')" disabled>📄 Download PDF</button>
     <button class="btn-dl word" id="btnWord" onclick="downloadReport('docx')" disabled>📝 Download Word</button>
-    <button class="btn-dl excel" id="btnExcel" onclick="exportExcel()" disabled>📊 Export Excel</button>
+    <button class="btn-dl xlsx" id="btnXlsx" onclick="downloadReport('xlsx')" disabled>📊 Download Excel</button>
   </div>
 
   <!-- MAP TAB -->
@@ -334,7 +332,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
       <!-- Legend — 2-col, raised above OSM footer -->
       <div class="map-legend">
         <div class="legend-title">Supply Chain</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#d50c0c;border:2px solid #ffe550"></div>OEM</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#d50c0c"></div>OEM</div>
         <div class="legend-item"><div class="legend-dot" style="background:#47c8ff"></div>Tier 1</div>
         <div class="legend-item"><div class="legend-dot" style="background:#e8ff47"></div>Tier 2</div>
         <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div>Tier 3</div>
@@ -432,7 +430,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 // GLOBALS
 //const BACKEND = 'http://127.0.0.1:5000';
 const BACKEND = '';
-const TCOLORS = ['#47c8ff','#AA6B39','#a78bfa','#fb923c','#a78bfa'];
+const TCOLORS = ['#47c8ff','#e8ff47','#a78bfa','#fb923c','#a78bfa'];
 const TCLASS  = ['t1','t2','t3','t4','t5'];
 const PROVIDER_META = {
   anthropic: { label: 'Anthropic Claude', color: '#e8ff47' },
@@ -445,7 +443,9 @@ let evtSrc = null;
 let lmap = null;
 const nodeReg = {};
 let oemMarker = null;
+let oemNodeCount = 0;
 let lastSupplyChain = null;
+let pendingRegulatory = null;
 
 // ── Heatmap state ─────────────────────────────────────────────────────────────
 const heatPoints = { oem:[], tier_1:[], tier_2:[], tier_3:[], tier_4:[] };
@@ -512,6 +512,7 @@ function initMap() {
   focusedNode = null;
   activeFilter = 'all';
   oemMarker = null;
+  oemNodeCount = 0;
   resetHeatPoints();
 
   lmap = L.map('map', { center:[20,10], zoom:2, zoomControl:true });
@@ -532,8 +533,8 @@ function addNode(lat, lng, label, color, tier, popupHtml, jitter=true) {
   const m = L.circleMarker([jlat, jlng], {
     radius: r,
     fillColor: color,
-    color: tier===0 ? '#ffe550' : 'rgba(0,0,0,0.5)',
-    weight: tier===0 ? 2.5 : 1,
+    color: 'rgba(0,0,0,0)',
+    weight: 0,
     fillOpacity: 0.9
   }).addTo(lmap);
   m.bindPopup(popupHtml, {maxWidth:270});
@@ -612,8 +613,8 @@ function focusNode(key) {
     n.marker.setStyle({
       fillOpacity: isHighlighted ? 0.95 : 0.05,
       opacity:     isHighlighted ? 1    : 0.05,
-      weight:      isFocus ? 3 : 1,
-      color:       isFocus ? '#ffffff' : 'rgba(0,0,0,0.5)',
+      weight:      0,
+      color:       'rgba(0,0,0,0)',
       radius:      isFocus ? (n.marker.options.radius * 1.4) : n.marker.options.radius
     });
   });
@@ -633,8 +634,8 @@ function clearFocus() {
     n.marker.setStyle({
       fillOpacity: 0.9,
       opacity: 1,
-      weight: 1,
-      color: 'rgba(0,0,0,0.5)',
+      weight: 0,
+      color: 'rgba(0,0,0,0)',
       radius: n.marker.options.radius  // restore original
     });
   });
@@ -768,7 +769,7 @@ function renderProduct(p) {
       <div class="pu-country">📍 ${p.oem_country||''}</div>
       <div class="pu-tier" style="color:#e8ff47;border-color:#e8ff47">OEM</div>
       <div class="pu-comps">${p.oem_manufacturer||''}</div>`;
-    const node = addNode(p.lat, p.lng, p.product_name, '#ffffff', 0, popup, false);
+    const node = addNode(p.lat, p.lng, p.product_name, '#d50c0c', 0, popup, false);
     if (node) {
       oemMarker = node;
       const oemKey = (p.oem_manufacturer||p.product_name).toLowerCase();
@@ -793,32 +794,39 @@ function findParentNode(suppliesTo) {
 }
 
 // ── render OEMs ───────────────────────────────────────────────────────────────
+function addOEMMapNodes(oems) {
+  if (!oems || oems.length === 0) return;
+  oems.forEach((oem, i) => {
+    if (!oem.lat || !oem.lng) return;
+    const popup = `<div class="pu-name">${oem.company_name}</div>
+      <div class="pu-country">📍 ${oem.country||'—'}</div>
+      <div class="pu-tier" style="color:#d50c0c;border-color:#d50c0c">OEM</div>
+      <div class="pu-comps">${oem.role||''} ${oem.notes ? '· '+oem.notes : ''}</div>`;
+    const existingNode = nodeReg[oem.company_name.toLowerCase()];
+    const node = existingNode || addNode(oem.lat, oem.lng, oem.company_name, '#d50c0c', 0, popup, oemNodeCount > 0);
+    if (node) {
+      if (!existingNode) {
+        const ok = oem.company_name.toLowerCase();
+        node.key = ok;
+        nodeReg[ok] = node;
+        oemNodeCount++;
+      }
+      if (!oemMarker) oemMarker = node;
+      const intensity = oem.market_share==='high' ? 1.0 : oem.market_share==='medium' ? 0.6 : 0.3;
+      addHeatPoint('oem', node.lat, node.lng, intensity);
+    }
+  });
+}
+
 function renderOEMs(oems) {
   if (!oems || oems.length === 0) return;
+  addOEMMapNodes(oems);
   const section = document.getElementById('oemSection');
   const grid    = document.getElementById('oemGrid');
   grid.innerHTML = '';
   section.classList.add('visible');
 
   oems.forEach((oem, i) => {
-    if (oem.lat && oem.lng) {
-      const popup = `<div class="pu-name">${oem.company_name}</div>
-        <div class="pu-country">📍 ${oem.country||'—'}</div>
-        <div class="pu-tier" style="color:#d50c0c;border-color:#d50c0c">OEM</div>
-        <div class="pu-comps">${oem.role||''} ${oem.notes ? '· '+oem.notes : ''}</div>`;
-      const existingNode = nodeReg[oem.company_name.toLowerCase()];
-      const node = existingNode || addNode(oem.lat, oem.lng, oem.company_name, '#d50c0c', 0, popup, i > 0);
-      if (node) {
-        if (!existingNode) {
-          const ok = oem.company_name.toLowerCase();
-          node.key = ok;
-          nodeReg[ok] = node;
-        }
-        if (i === 0) oemMarker = node;
-        const intensity = oem.market_share==='high' ? 1.0 : oem.market_share==='medium' ? 0.6 : 0.3;
-        addHeatPoint('oem', node.lat, node.lng, intensity);
-      }
-    }
     const msClass = oem.market_share==='high' ? 'ms-high' : oem.market_share==='medium' ? 'ms-medium' : 'ms-low';
     const confClass = oem.confidence==='high' ? 'ch' : oem.confidence==='medium' ? 'cm' : 'cl';
     const confLabel = oem.confidence || 'unknown';
@@ -978,63 +986,65 @@ function renderTierList(tierNum, suppliers) {
   });
 }
 
-// ── regulatory rendering ──────────────────────────────────────────────────────
+// ── map stats ─────────────────────────────────────────────────────────────────
+function updateStats(sc) {
+  let total=0, countries=new Set();
+  Object.values(sc.tiers||{}).forEach(arr=>arr.forEach(s=>{total++;if(s.country)countries.add(s.country);}));
+  document.getElementById('mapStats').innerHTML=`
+    <div class="stat"><strong>${total}</strong>Total Suppliers</div>
+    <div class="stat"><strong>${countries.size}</strong>Countries</div>
+    <div class="stat"><strong>${Object.keys(sc.tiers||{}).length}</strong>Tier Depth</div>
+    <div class="stat"><strong>${Object.keys(nodeReg).length}</strong>Mapped Nodes</div>`;
+}
+
+// ── render regulatory ─────────────────────────────────────────────────────────
 const REG_BODIES_ORDER = ['FDA','EMA','TGA','HSA','PMDA','MHRA','NMPA'];
 const REG_BODY_REGION  = {FDA:'USA',EMA:'EU',TGA:'Australia',HSA:'Singapore',PMDA:'Japan',MHRA:'UK',NMPA:'China'};
 
 function statusClass(s) {
-  const v = (s||'').toLowerCase();
-  if (v==='approved')  return 'rs-approved';
-  if (v==='registered') return 'rs-registered';
-  if (v==='pending')   return 'rs-pending';
-  if (v==='not found') return 'rs-not-found';
+  const sl = (s||'').toLowerCase();
+  if (sl === 'approved')   return 'rs-approved';
+  if (sl === 'registered') return 'rs-registered';
+  if (sl === 'pending')    return 'rs-pending';
+  if (sl === 'not found')  return 'rs-not-found';
   return 'rs-unknown';
 }
 
 function renderRegulatory(regulatory) {
   if (!regulatory || regulatory.length === 0) return;
-  const sec     = document.getElementById('regSection');
+  const section = document.getElementById('regSection');
   const content = document.getElementById('regContent');
   content.innerHTML = '';
-  regulatory.forEach(entry => {
-    const bodiesMap = {};
-    (entry.regulatory_bodies || []).forEach(b => { bodiesMap[b.body] = b; });
-    const rows = REG_BODIES_ORDER.map(id => {
-      const b   = bodiesMap[id] || {};
-      const st  = (b.status || 'unknown').toLowerCase();
-      const cls = statusClass(st);
-      return `<tr>
-        <td><strong>${id}</strong></td>
-        <td style="color:var(--muted)">${REG_BODY_REGION[id]||'—'}</td>
-        <td><span class="reg-status ${cls}">${st.replace('not found','Not Found').replace(/^\w/,c=>c.toUpperCase())}</span></td>
-        <td style="color:var(--muted1);font-size:.68rem">${b.details||'—'}</td>
-        <td style="color:var(--muted);font-size:.65rem">${b.confidence||'—'}</td>
-      </tr>`;
-    }).join('');
+  section.classList.add('visible');
+
+  regulatory.forEach(oem => {
+    const bodies = {};
+    (oem.regulatory_bodies || []).forEach(b => { bodies[b.body] = b; });
+
     const block = document.createElement('div');
     block.className = 'reg-oem-block';
+    let rows = '';
+    REG_BODIES_ORDER.forEach(bid => {
+      const b = bodies[bid] || {};
+      const status = b.status || 'unknown';
+      const sc = statusClass(status);
+      rows += `<tr>
+        <td><strong>${bid}</strong></td>
+        <td style="color:var(--muted)">${REG_BODY_REGION[bid]||'—'}</td>
+        <td><span class="reg-status ${sc}">${status.charAt(0).toUpperCase()+status.slice(1)}</span></td>
+        <td style="color:var(--muted1)">${b.details||'—'}</td>
+        <td style="color:var(--muted)">${b.confidence||'—'}</td>
+      </tr>`;
+    });
     block.innerHTML = `
-      <div class="reg-oem-name">${entry.company_name||'—'}</div>
-      <div class="reg-oem-country">📍 ${entry.country||'—'}</div>
+      <div class="reg-oem-name">${oem.company_name}</div>
+      <div class="reg-oem-country">📍 ${oem.country||'—'}</div>
       <table class="reg-table">
         <thead><tr><th>Body</th><th>Region</th><th>Status</th><th>Details</th><th>Confidence</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
     content.appendChild(block);
   });
-  sec.style.display = 'block';
-}
-
-// ── map stats ─────────────────────────────────────────────────────────────────
-function updateStats(sc) {
-  let total=0, countries=new Set();
-  Object.values(sc.tiers||{}).forEach(arr=>arr.forEach(s=>{total++;if(s.country)countries.add(s.country);}));
-  document.getElementById('mapStats').innerHTML=`
-    <div class="stat"><strong>${sc.product?.product_name||'—'}</strong>Product Name</div>
-    <div class="stat"><strong>${total}</strong>Total Suppliers</div>
-    <div class="stat"><strong>${countries.size}</strong>Countries</div>
-    <div class="stat"><strong>${Object.keys(sc.tiers||{}).length}</strong>Tier Depth</div>
-    <div class="stat"><strong>${Object.keys(nodeReg).length}</strong>Mapped Nodes</div>`;
 }
 
 // ── reset ─────────────────────────────────────────────────────────────────────
@@ -1053,12 +1063,13 @@ function reset() {
   document.getElementById('downloadBar').classList.remove('visible');
   document.getElementById('btnPdf').disabled=true;
   document.getElementById('btnWord').disabled=true;
-  document.getElementById('btnExcel').disabled=true;
+  document.getElementById('btnXlsx').disabled=true;
   document.getElementById('oemSection').classList.remove('visible');
   document.getElementById('oemGrid').innerHTML='';
-  document.getElementById('regSection').style.display='none';
+  document.getElementById('regSection').classList.remove('visible');
   document.getElementById('regContent').innerHTML='';
   lastSupplyChain = null;
+  pendingRegulatory = null;
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
   const tv = document.getElementById('timerValue'); if(tv){ tv.textContent='0.0s'; tv.style.color='var(--muted)'; }
   const td = document.getElementById('timerDisplay'); if(td) td.style.display='none';
@@ -1070,7 +1081,7 @@ function reset() {
 
 async function downloadReport(format) {
   if (!lastSupplyChain) return;
-  const btn = format==='pdf' ? document.getElementById('btnPdf') : document.getElementById('btnWord');
+  const btn = format==='pdf' ? document.getElementById('btnPdf') : format==='xlsx' ? document.getElementById('btnXlsx') : document.getElementById('btnWord');
   const origText = btn.innerHTML;
   btn.disabled=true;
   btn.innerHTML='<span class="spinner"></span>Generating…';
@@ -1078,7 +1089,10 @@ async function downloadReport(format) {
     const resp = await fetch(`${BACKEND}/api/export/${format}`, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(lastSupplyChain)
+      body:JSON.stringify({
+        ...lastSupplyChain,
+        regulatory: lastSupplyChain.regulatory || []
+      })
     });
     if (!resp.ok) { const err=await resp.json(); alert('Export failed: '+(err.error||'Unknown error')); return; }
     const blob = await resp.blob();
@@ -1089,33 +1103,6 @@ async function downloadReport(format) {
     URL.revokeObjectURL(url);
   } catch(e) { alert('Export failed: '+e.message); }
   finally { btn.disabled=false; btn.innerHTML=origText; }
-}
-
-// ── excel export ──────────────────────────────────────────────────────────────
-async function exportExcel() {
-  if (!lastSupplyChain) return;
-  const btn = document.getElementById('btnExcel');
-  const origText = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Generating…';
-  try {
-    const depth = Object.keys(lastSupplyChain.tiers || {}).length || 1;
-    const product = lastSupplyChain.product?.product_name || 'supply_chain';
-    const resp = await fetch(`${BACKEND}/api/export/excel`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ supply_chain: lastSupplyChain, product_input: product, depth })
-    });
-    if (!resp.ok) { const err = await resp.json(); alert('Export failed: ' + (err.error || 'Unknown error')); return; }
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${product.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40)}_supply_chain.xlsx`;
-    a.click();
-    URL.revokeObjectURL(url);
-  } catch(e) { alert('Export failed: ' + e.message); }
-  finally { btn.disabled = false; btn.innerHTML = origText; }
 }
 
 // ── load providers ────────────────────────────────────────────────────────────
@@ -1487,34 +1474,36 @@ function startMapping() {
   reset();
   const btn=document.getElementById('mapBtn');
   btn.disabled=true; btn.innerHTML='<span class="spinner"></span>MAPPING…';
-  document.getElementById('agenticBtn').disabled=true;
   // declare provider FIRST before any usage
   const provider=document.getElementById('providerSelect').value;
   const isAll = provider === "all";
-  appendLog(`⚡ Mapping: "${product}" (depth: ${depth})`);
+  const isPharma = document.getElementById('isPharmaCheck').checked;
+  appendLog(`⚡ Mapping: "${product}" (depth: ${depth}${isPharma?' | 💊 pharma mode':''})` );
   startTimer();
   if (provider !== 'all') setProviderStatus(provider, 'working');
-  const isPharma = document.getElementById('isPharmaCheck').checked;
-  if (isAll) evtSrc = new EventSource(`${BACKEND}/api/map_all?product=${encodeURIComponent(product)}&depth=${depth}&is_pharma=${isPharma}`);
-  else evtSrc=new EventSource(`${BACKEND}/api/map?product=${encodeURIComponent(product)}&depth=${depth}&provider=${provider}&is_pharma=${isPharma}`);
+  const pharmaParam = isPharma ? '&is_pharma=true' : '';
+  if (isAll) evtSrc = new EventSource(`${BACKEND}/api/map_all?product=${encodeURIComponent(product)}&depth=${depth}${pharmaParam}`);
+  else evtSrc=new EventSource(`${BACKEND}/api/map?product=${encodeURIComponent(product)}&depth=${depth}&provider=${provider}${pharmaParam}`);
   let activeProviderName = null;
   evtSrc.onmessage=e=>{
     try {
       const d=JSON.parse(e.data);
       if (d.type==='status') appendLog(d.message);
       else if (d.type === 'provider_start') {
-        activeProviderName = d.name;
+        activeProviderName = d.provider;
         appendLog(d.message);
-        setProviderStatus(d.name, 'working');
+        setProviderStatus(d.provider, 'working');
       }
       else if (d.type === 'provider_done') {
         appendLog(d.message);
         if (activeProviderName) setProviderStatus(activeProviderName, 'done');
       }
       else if (d.type==='oem_discovered') {
-        renderOEMs(d.oems);
+        addOEMMapNodes(d.oems);       // always plot on map immediately
+        if (!isAll) renderOEMs(d.oems); // cards only for single-provider mid-stream
       }
       else if (d.type==='regulatory_found') {
+        pendingRegulatory = d.regulatory;
         renderRegulatory(d.regulatory);
       }
       else if (d.type==='product_identified') {
@@ -1529,13 +1518,14 @@ function startMapping() {
         document.getElementById('downloadBar').classList.add('visible');
         document.getElementById('btnPdf').disabled=false;
         document.getElementById('btnWord').disabled=false;
-        document.getElementById('btnExcel').disabled=false;
+        document.getElementById('btnXlsx').disabled=false;
         document.getElementById('heatControls').style.display='block';
         document.getElementById('tierFilter').classList.add('visible');
       }
       else if (d.type==='complete') {
         const provName = activeProviderName || provider;
         lastSupplyChain = mergeSupplyChains(lastSupplyChain, d.supply_chain, provName);
+        if (pendingRegulatory) { lastSupplyChain.regulatory = pendingRegulatory; pendingRegulatory = null; }
         // end debug on 13th May
         if(d.supply_chain?.summary){ document.getElementById('summaryText').textContent=lastSupplyChain.summary; document.getElementById('summaryBlock').classList.add('visible'); }
         updateStats(lastSupplyChain);
@@ -1543,7 +1533,7 @@ function startMapping() {
         document.getElementById('downloadBar').classList.add('visible');
         document.getElementById('btnPdf').disabled=false;
         document.getElementById('btnWord').disabled=false;
-        document.getElementById('btnExcel').disabled=false;
+        document.getElementById('btnXlsx').disabled=false;
         document.getElementById('heatControls').style.display='block';
         document.getElementById('tierFilter').classList.add('visible');
       }
@@ -1573,76 +1563,10 @@ function startMapping() {
   const done = () => {
     btn.disabled=false;
     btn.innerHTML='▶ MAP CHAIN';
-    document.getElementById('agenticBtn').disabled=false;
     if(evtSrc){evtSrc.close();evtSrc=null;}
     stopTimer();
     const _p = document.getElementById('providerSelect').value;
     if (_p && _p !== 'all') setProviderStatus(_p, 'done');
-  };
-}
-
-function startAgenticMapping() {
-  const product = document.getElementById('productInput').value.trim();
-  const depth   = parseInt(document.getElementById('depthSelect').value);
-  if (!product) { document.getElementById('productInput').focus(); return; }
-  if (evtSrc) { evtSrc.close(); evtSrc = null; }
-  reset();
-  const btn    = document.getElementById('agenticBtn');
-  const mapBtn = document.getElementById('mapBtn');
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>MAPPING…';
-  mapBtn.disabled = true;
-  appendLog(`⚡ Agentic Mapping: "${product}" (depth: ${depth}) — Gemini (non-China) + DeepSeek (China)`);
-  startTimer();
-  const isPharmaAgentic = document.getElementById('isPharmaCheck').checked;
-  evtSrc = new EventSource(`${BACKEND}/api/map_agentic?product=${encodeURIComponent(product)}&depth=${depth}&is_pharma=${isPharmaAgentic}`);
-  evtSrc.onmessage = e => {
-    try {
-      const d = JSON.parse(e.data);
-      if (d.type === 'status') appendLog(d.message);
-      else if (d.type === 'oem_discovered') renderOEMs(d.oems);
-      else if (d.type === 'regulatory_found') renderRegulatory(d.regulatory);
-      else if (d.type === 'product_identified') {
-        if (!document.getElementById('productCard').classList.contains('visible')) renderProduct(d.product);
-      }
-      else if (d.type === 'tier_complete') {
-        renderTierMap(d.tier, d.suppliers);
-        renderTierList(d.tier, d.suppliers);
-        document.getElementById('downloadBar').classList.add('visible');
-        document.getElementById('btnPdf').disabled = false;
-        document.getElementById('btnWord').disabled = false;
-        document.getElementById('btnExcel').disabled = false;
-        document.getElementById('heatControls').style.display = 'block';
-        document.getElementById('tierFilter').classList.add('visible');
-      }
-      else if (d.type === 'complete') {
-        lastSupplyChain = mergeSupplyChains(lastSupplyChain, d.supply_chain, 'agentic');
-        if (d.supply_chain?.summary) {
-          document.getElementById('summaryText').textContent = lastSupplyChain.summary;
-          document.getElementById('summaryBlock').classList.add('visible');
-        }
-        updateStats(lastSupplyChain);
-        fitBounds();
-        document.getElementById('downloadBar').classList.add('visible');
-        document.getElementById('btnPdf').disabled = false;
-        document.getElementById('btnWord').disabled = false;
-        document.getElementById('btnExcel').disabled = false;
-        document.getElementById('heatControls').style.display = 'block';
-        document.getElementById('tierFilter').classList.add('visible');
-      }
-      else if (d.type === 'error') { appendLog(`❌ ${d.message}`, false); done(); }
-      else if (d.type === 'stream_end') {
-        appendLog('✅ Agentic mapping complete! Use the download buttons to export results.', false);
-        done();
-        evtSrc.close();
-      }
-    } catch(err) { console.error(err); }
-  };
-  evtSrc.onerror = () => { appendLog('❌ Connection lost. Is app.py running on port 5000?', false); done(); };
-  const done = () => {
-    btn.disabled = false; btn.innerHTML = '⚡ MAP AGENTIC';
-    mapBtn.disabled = false;
-    if (evtSrc) { evtSrc.close(); evtSrc = null; }
-    stopTimer();
   };
 }
 

@@ -66,15 +66,27 @@ _COL_ALIASES = {
     "product":           ["product"],
 }
 
-def _detect_cols(ws):
+_OEM_COL_ALIASES = {
+    "company_name":      ["company name", "company"],
+    "product":           ["product"],
+    "regulatory_body":   ["regulatory body"],
+    "region":            ["region"],
+    "status":            ["status"],
+    "details":           ["details"],
+    "confidence":        ["confidence"],
+}
+
+def _detect_cols(ws, aliases=None):
     """Return {logical_name: 1-based column index} for a worksheet."""
+    if aliases is None:
+        aliases = _COL_ALIASES
     header = {
         str(cell.value).strip().lower(): cell.column
         for cell in ws[1] if cell.value
     }
     result = {}
-    for logical, aliases in _COL_ALIASES.items():
-        for alias in aliases:
+    for logical, alias_list in aliases.items():
+        for alias in alias_list:
             if alias in header:
                 result[logical] = header[alias]
                 break
@@ -86,12 +98,18 @@ def _detect_cols(ws):
 def _ingest_files(files_data, stream_id):
     """
     Classify rows from all uploaded files into analysis_rows and research_rows.
+    Also reads OEM sheets for regulatory data (pharmaceutical products only).
 
     files_data: list of {"filename": str, "bytes": bytes}
-    Returns (analysis_rows, research_rows).
+    Returns (analysis_rows, research_rows, regulatory_by_file).
+      regulatory_by_file: {filename: [{"oem_name", "regulatory_body", "region",
+                                       "status", "details", "confidence"}, ...]}
+      Non-empty only when the uploaded file was generated for a pharma product
+      (indicated by the presence of "Regulatory Body" column in the OEM sheet).
     """
-    analysis_rows = []
-    research_rows = []
+    analysis_rows      = []
+    research_rows      = []
+    regulatory_by_file = {}   # filename → list of regulatory dicts
 
     for item in files_data:
         filename = item["filename"]
@@ -103,6 +121,7 @@ def _ingest_files(files_data, stream_id):
             _log(stream_id, f"[error] Could not open {filename}: {e}", True)
             continue
 
+        # ── Tier sheets ───────────────────────────────────────────────────────
         tier_sheets = [ws for ws in wb.worksheets if "tier" in ws.title.lower()]
         if not tier_sheets:
             _log(stream_id, f"[warn] No tier sheets found in {filename} — skipping", True)
@@ -157,7 +176,37 @@ def _ingest_files(files_data, stream_id):
                     research_rows.append(entry)
                 # else: excluded entirely
 
-    return analysis_rows, research_rows
+        # ── OEM sheets — read regulatory data for pharma products ─────────────
+        oem_sheets = [ws for ws in wb.worksheets if "oem" in ws.title.lower()]
+        reg_rows   = []
+        for ws in oem_sheets:
+            cols = _detect_cols(ws, _OEM_COL_ALIASES)
+            if not cols.get("regulatory_body"):
+                continue  # non-pharma OEM sheet — no regulatory columns
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                def oget(key):
+                    col = cols.get(key)
+                    if col is None:
+                        return ""
+                    val = row[col - 1]
+                    return str(val).strip() if val is not None else ""
+                oem_name = oget("company_name")
+                reg_body = oget("regulatory_body")
+                if not oem_name or not reg_body:
+                    continue
+                reg_rows.append({
+                    "oem_name":        oem_name,
+                    "regulatory_body": reg_body,
+                    "region":          oget("region"),
+                    "status":          oget("status"),
+                    "details":         oget("details"),
+                    "confidence":      oget("confidence"),
+                })
+        if reg_rows:
+            regulatory_by_file[filename] = reg_rows
+            _log(stream_id, f"[pharma] {filename}: {len(reg_rows)} regulatory row(s) found")
+
+    return analysis_rows, research_rows, regulatory_by_file
 
 
 # ── Pandas analysis ───────────────────────────────────────────────────────────
@@ -520,11 +569,12 @@ def _add_picture_safe(doc, png_bytes, width_inches=5.5):
         pass
 
 
-def _add_product_section(doc, helpers, display_name, rows, sub_num):
-    """Render one product sub-section: metrics tables + Sankey + node-link."""
-    _ct      = helpers["_ct"]
-    _hdr_row = helpers["_hdr_row"]
+def _add_product_section(doc, helpers, display_name, rows, sub_num, regulatory_rows=None):
+    """Render one product sub-section: metrics tables + optional regulatory + Sankey + node-link."""
+    _ct       = helpers["_ct"]
+    _hdr_row  = helpers["_hdr_row"]
     _flag_row = helpers["_flag_row"]
+    _set_bg   = helpers["_set_bg"]
 
     doc.add_heading(f"{sub_num}. {display_name}", level=2)
 
@@ -566,6 +616,34 @@ def _add_product_section(doc, helpers, display_name, rows, sub_num):
             _ct(row[1], entry["count"])
         doc.add_paragraph()
 
+    # Regulatory status (pharma products only)
+    if regulatory_rows:
+        from docx.shared import RGBColor
+        doc.add_heading("Regulatory Status (OEM Manufacturers)", level=3)
+
+        _STATUS_COLOURS = {
+            "approved":   ("C8E6C9", "1B5E20"),   # green bg, dark text
+            "registered": ("C8E6C9", "1B5E20"),
+            "pending":    ("FFF9C4", "F57F17"),   # yellow
+            "not found":  ("FFCDD2", "B71C1C"),   # red
+        }
+
+        tbl = doc.add_table(rows=1, cols=5)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["OEM Manufacturer", "Regulatory Body", "Region", "Status", "Confidence"], "4A148C")
+
+        for entry in regulatory_rows:
+            row = tbl.add_row().cells
+            _ct(row[0], entry["oem_name"])
+            _ct(row[1], entry["regulatory_body"])
+            _ct(row[2], entry["region"])
+            status_lower = entry["status"].lower() if entry["status"] else ""
+            colours = _STATUS_COLOURS.get(status_lower, ("F5F5F5", "000000"))
+            _ct(row[3], entry["status"])
+            _set_bg(row[3], colours[0])
+            _ct(row[4], entry["confidence"])
+        doc.add_paragraph()
+
     # Per-product choropleth
     choropleth_png = _chart_choropleth(rows, title=f"Geographic Distribution — {display_name}")
     if choropleth_png:
@@ -591,7 +669,7 @@ def _add_product_section(doc, helpers, display_name, rows, sub_num):
 
 # ── Claude narrative ──────────────────────────────────────────────────────────
 
-def _generate_narrative(metrics, stream_id):
+def _generate_narrative(metrics, stream_id, regulatory_by_file=None):
     _status(stream_id, "🤖 Generating narrative with Claude…")
 
     prompt = f"""You are a senior supply chain intelligence analyst writing a formal briefing document.
@@ -624,20 +702,38 @@ Return ONLY valid JSON (no markdown, no code fences) with these exact keys:
   "needs_research": "2 paragraphs: summarise the entries that require further research (Company Exists + Supply Ties confirmed but component unverified). Name specific companies if present. Recommend concrete next steps — targeted web searches, direct outreach, or procurement team verification. Write empty string if the list is empty."
 }}"""
 
-    raw = call_ai(prompt, "anthropic", max_tokens=4000)
+    # Append pharma regulatory section to prompt if regulatory data exists
+    all_reg_rows = []
+    if regulatory_by_file:
+        for rows in regulatory_by_file.values():
+            all_reg_rows.extend(rows)
+
+    if all_reg_rows:
+        reg_json = json.dumps(all_reg_rows, indent=2)
+        prompt = prompt.rstrip("}")  # remove closing brace
+        prompt += (
+            ',\n  "regulatory_analysis": "2-3 paragraphs: analyse the regulatory approval landscape for the OEM manufacturers in this pharmaceutical supply chain. '
+            'Which regulatory bodies are represented (e.g. FDA, EMA, PMDA)? Which OEMs are fully approved vs pending vs not found? '
+            'What does the approval pattern imply for market access, compliance risk, and supply chain resilience? '
+            'Cite specific OEM names, regulatory bodies, and status values from the data."\n}}'
+        )
+        prompt += f"\n\nPHARMA REGULATORY DATA:\n{reg_json[:3000]}"
+
+    raw = call_ai(prompt, "anthropic", max_tokens=4500)
     parsed = safe_parse_json(raw)
     if not isinstance(parsed, dict) or "executive_summary" not in parsed:
         return {
             "executive_summary": raw,
             "geo_concentration": "", "key_components": "", "hub_companies": "",
-            "bottlenecks": "", "circular_relationships": "", "cross_product": "", "needs_research": "",
+            "bottlenecks": "", "circular_relationships": "", "cross_product": "",
+            "needs_research": "", "regulatory_analysis": "",
         }
     return parsed
 
 
 # ── DOCX builder ──────────────────────────────────────────────────────────────
 
-def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
+def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_file=None):  # noqa: C901
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
     from docx.oxml.ns import qn
@@ -679,7 +775,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
             _set_bg(cells[-1], "FFFDE7")
 
     # Pass closures to per-product section renderer
-    _docx_helpers = {"_ct": _ct, "_hdr_row": _hdr_row, "_flag_row": _flag_row}
+    _docx_helpers = {"_ct": _ct, "_hdr_row": _hdr_row, "_flag_row": _flag_row, "_set_bg": _set_bg}
 
     doc = Document()
     for sec in doc.sections:
@@ -777,8 +873,42 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
         _ct(row[1], entry["centrality_score"])
     doc.add_paragraph()
 
-    # ── Circular Relationships ───────────────────────────────────────────────
+    # ── Regulatory Analysis (pharma only) ────────────────────────────────────
     next_sec = 6
+    all_reg_rows = []
+    if regulatory_by_file:
+        for rows in regulatory_by_file.values():
+            all_reg_rows.extend(rows)
+
+    if all_reg_rows:
+        doc.add_heading(f"{next_sec}. Regulatory Landscape", level=1)
+        reg_narrative = narrative.get("regulatory_analysis", "")
+        if reg_narrative:
+            doc.add_paragraph(reg_narrative)
+
+        tbl = doc.add_table(rows=1, cols=5)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["OEM Manufacturer", "Regulatory Body", "Region", "Status", "Confidence"], "4A148C")
+
+        _REG_STATUS_COLOURS = {
+            "approved":   "C8E6C9",
+            "registered": "C8E6C9",
+            "pending":    "FFF9C4",
+            "not found":  "FFCDD2",
+        }
+        for entry in all_reg_rows:
+            row = tbl.add_row().cells
+            _ct(row[0], entry["oem_name"])
+            _ct(row[1], entry["regulatory_body"])
+            _ct(row[2], entry["region"])
+            _ct(row[3], entry["status"])
+            bg = _REG_STATUS_COLOURS.get((entry["status"] or "").lower(), "F5F5F5")
+            _set_bg(row[3], bg)
+            _ct(row[4], entry["confidence"])
+        doc.add_paragraph()
+        next_sec += 1
+
+    # ── Circular Relationships ───────────────────────────────────────────────
     if metrics.get("circular_pairs"):
         doc.add_heading(f"{next_sec}. Circular Supply Relationships", level=1)
         narr_circ = narrative.get("circular_relationships", "")
@@ -827,8 +957,13 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
         "The following sub-sections provide per-product analysis including hub companies, "
         "potential bottlenecks, key components, and supply chain visualisations."
     )
+    reg = regulatory_by_file or {}
     for sub_i, (display_name, prod_rows) in enumerate(product_groups, 1):
-        _add_product_section(doc, _docx_helpers, display_name, prod_rows, f"{next_sec}.{sub_i}")
+        # Regulatory rows keyed by source file — all rows in a group share the same source file
+        source_file   = prod_rows[0]["source_file"] if prod_rows else None
+        reg_rows_prod = reg.get(source_file, [])
+        _add_product_section(doc, _docx_helpers, display_name, prod_rows,
+                             f"{next_sec}.{sub_i}", regulatory_rows=reg_rows_prod)
     doc.add_paragraph()
     next_sec += 1
 
@@ -873,7 +1008,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
 
 def _run_insights(stream_id, files_data):
     try:
-        analysis_rows, research_rows = _ingest_files(files_data, stream_id)
+        analysis_rows, research_rows, regulatory_by_file = _ingest_files(files_data, stream_id)
 
         if not analysis_rows:
             _push(stream_id, {
@@ -882,7 +1017,9 @@ def _run_insights(stream_id, files_data):
             })
             return
 
-        _status(stream_id, f"✅ {len(analysis_rows)} analysis rows loaded ({sum(1 for r in analysis_rows if not r['_inferred'])} verified, {sum(1 for r in analysis_rows if r['_inferred'])} inferred). {len(research_rows)} flagged for further research.")
+        total_reg = sum(len(v) for v in regulatory_by_file.values())
+        pharma_note = f" 💊 {total_reg} regulatory row(s) found." if total_reg else ""
+        _status(stream_id, f"✅ {len(analysis_rows)} analysis rows loaded ({sum(1 for r in analysis_rows if not r['_inferred'])} verified, {sum(1 for r in analysis_rows if r['_inferred'])} inferred). {len(research_rows)} flagged for further research.{pharma_note}")
 
         pandas_metrics = _run_pandas(analysis_rows, stream_id)
         graph_metrics  = _run_networkx(analysis_rows, stream_id)
@@ -907,11 +1044,12 @@ def _run_insights(stream_id, files_data):
             ],
         }
 
-        narrative = _generate_narrative(metrics, stream_id)
+        narrative = _generate_narrative(metrics, stream_id, regulatory_by_file=regulatory_by_file)
 
         _status(stream_id, "🗺️ Generating choropleth map…")
         _status(stream_id, "📄 Building DOCX report (per-product charts may take ~10s)…")
-        docx_bytes = _build_docx(metrics, narrative, analysis_rows, research_rows)
+        docx_bytes = _build_docx(metrics, narrative, analysis_rows, research_rows,
+                                 regulatory_by_file=regulatory_by_file)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
             tmp.write(docx_bytes)

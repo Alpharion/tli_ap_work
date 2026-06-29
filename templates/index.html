@@ -22,7 +22,7 @@
   --accent3:#ff6b47;
   --accent4:#ffc83c;
   --text:#e2e4ed; --muted:#6b7094; --text1:#ffc654; --muted1:#d4d5d9; --muted2:#1b1c20;
-  --t1:#47c8ff; --t2:#8118de; --t3:#a78bfa; --t4:#fb923c; --ok:#4ade80;
+  --t1:#47c8ff; --t2:#e8c100; --t3:#a78bfa; --t4:#fb923c; --ok:#4ade80;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text1);font-family:'Space Mono',monospace;min-height:100vh;overflow-x:hidden}
@@ -141,7 +141,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .supplier-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:14px 16px;transition:border-color .2s,transform .2s;position:relative;overflow:hidden;cursor:pointer}
 .supplier-card:hover{border-color:var(--muted);transform:translateY(-2px)}
 .supplier-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%}
-.supplier-card.t1::before{background:var(--t1)}.supplier-card.t2::before{background:var(--t3)}
+.supplier-card.t1::before{background:var(--t1)}.supplier-card.t2::before{background:var(--t2)}
 .supplier-card.t3::before{background:var(--t3)}.supplier-card.t4::before{background:var(--t4)}
 .s-name{font-family:'Syne',sans-serif;font-weight:700;font-size:.88rem;margin-bottom:3px}
 .s-country{font-size:.68rem;color:var(--muted);margin-bottom:7px}
@@ -345,7 +345,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
         <div class="legend-title">Supply Chain</div>
         <div class="legend-item"><div class="legend-dot" style="background:#d50c0c"></div>OEM</div>
         <div class="legend-item"><div class="legend-dot" style="background:#47c8ff"></div>Tier 1</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#AA6B39"></div>Tier 2</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#e8c100"></div>Tier 2</div>
         <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div>Tier 3</div>
         <!--<div class="legend-item"><div class="legend-dot" style="background:#fb923c"></div>Tier 4</div>-->
         <div class="legend-item"><div class="legend-dash" style="border-color:#47c8ff"></div>Supply link</div>
@@ -371,7 +371,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
           <input type="checkbox" id="heat1" onchange="toggleHeat('tier_1',this.checked)">
         </label>
         <label class="heat-toggle">
-          <span class="heat-swatch" style="background:#AA6B39"></span>
+          <span class="heat-swatch" style="background:#e8c100"></span>
           <span class="heat-label">Tier 2 only</span>
           <input type="checkbox" id="heat2" onchange="toggleHeat('tier_2',this.checked)">
         </label>
@@ -403,7 +403,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
             <span class="fb-dot" style="background:#47c8ff"></span>Tier 1
           </button>
           <button class="filter-btn" id="fbT2" data-tier="2" onclick="filterTier(2)">
-            <span class="fb-dot" style="background:#AA6B39"></span>Tier 2
+            <span class="fb-dot" style="background:#e8c100"></span>Tier 2
           </button>
           <button class="filter-btn" id="fbT3" data-tier="3" onclick="filterTier(3)">
             <span class="fb-dot" style="background:#a78bfa"></span>Tier 3
@@ -441,7 +441,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 // GLOBALS
 //const BACKEND = 'http://127.0.0.1:5000';
 const BACKEND = '';
-const TCOLORS = ['#47c8ff','#AA6B39','#a78bfa','#fb923c','#a78bfa'];
+const TCOLORS = ['#47c8ff','#e8c100','#a78bfa','#fb923c','#a78bfa'];
 const TCLASS  = ['t1','t2','t3','t4','t5'];
 const PROVIDER_META = {
   anthropic: { label: 'Anthropic Claude', color: '#e8ff47' },
@@ -542,8 +542,8 @@ function addNode(lat, lng, label, color, tier, popupHtml, jitter=true) {
   const m = L.circleMarker([jlat, jlng], {
     radius: r,
     fillColor: color,
-    color: 'rgba(0,0,0,0.5)',
-    weight: 1,
+    color: tier === 0 ? '#e8ff47' : 'rgba(0,0,0,0.5)',
+    weight: tier === 0 ? 2.5 : 1,
     fillOpacity: 0.9
   }).addTo(lmap);
   m.bindPopup(popupHtml, {maxWidth:270});

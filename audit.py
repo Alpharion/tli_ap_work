@@ -195,8 +195,10 @@ Return ONLY valid JSON (no markdown):
             verdict = "Disputed"
         elif vals == {"Confirmed"}:
             verdict = "Confirmed"
+        elif vals == {"Unconfirmed"}:
+            verdict = "Unconfirmed"
         else:
-            verdict = "Partial"
+            verdict = "Partial"   # mixed: some Confirmed, some Unconfirmed
 
         checks = [("Company Exists", ace), ("Supply Ties Exist", ast), ("Correct Component", acc)]
         if verdict == "Confirmed":
@@ -204,6 +206,8 @@ Return ONLY valid JSON (no markdown):
         elif verdict == "Disputed":
             disputed = [name for name, val in checks if val == "Disputed"]
             verdict_reason = f"Disputed on: {', '.join(disputed)}."
+        elif verdict == "Unconfirmed":
+            verdict_reason = "Evidence insufficient to confirm any of the 3 checks."
         else:
             verdict_reason = "; ".join(f"{name}: {val}" for name, val in checks) + "."
 

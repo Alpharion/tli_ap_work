@@ -261,9 +261,24 @@ def _run_networkx(analysis_rows, stream_id):
     else:
         bottleneck_companies = []
 
+    # Circular relationships — mutual edges (A supplies B and B supplies A)
+    circular_pairs = []
+    seen_pairs = set()
+    for a, b in G.edges():
+        if G.has_edge(b, a):
+            key = frozenset([a, b])
+            if key not in seen_pairs:
+                seen_pairs.add(key)
+                circular_pairs.append({
+                    "company_a": a,
+                    "company_b": b,
+                    "inferred":  node_inferred.get(a, False) or node_inferred.get(b, False),
+                })
+
     return {
-        "hub_companies":       hub_companies,
+        "hub_companies":        hub_companies,
         "bottleneck_companies": bottleneck_companies,
+        "circular_pairs":       circular_pairs,
     }
 
 
@@ -604,6 +619,7 @@ Return ONLY valid JSON (no markdown, no code fences) with these exact keys:
   "key_components": "2-3 paragraphs: which components appear most frequently across the supply chain and what does that tell us? Are there components supplied by only a small number of companies (concentration risk)? Cite the top components by name and frequency. Discuss substitutability and criticality.",
   "hub_companies": "2-3 paragraphs: identify the most connected suppliers by out-degree. Name the top hub companies and their customer counts. Explain why a hub company going offline would cascade across the supply chain. Note which of these are model-inferred relationships vs fully verified.",
   "bottlenecks": "2-3 paragraphs: analyse the betweenness centrality results. Name the top bottleneck companies and their centrality scores. Explain in plain terms what betweenness centrality means — a company with high betweenness sits on many of the shortest paths through the supply network, so its failure disconnects large portions of the chain. Recommend mitigation strategies (dual sourcing, safety stock, etc).",
+  "circular_relationships": "2-3 paragraphs: analyse any circular supply relationships detected (Company A supplies Company B AND Company B supplies Company A). Name the specific pairs. Explain why circular relationships are anomalous in a supply chain — they may indicate data quality issues, legitimate cross-supply agreements, or joint venture structures that require scrutiny. Discuss the operational and financial risk these create (circular dependency, price-fixing exposure, single-point-of-failure amplification). Write empty string if no circular pairs were detected.",
   "cross_product": "2-3 paragraphs on suppliers shared across multiple products, naming specific companies and the products they serve. Explain the dual risk: shared suppliers increase efficiency but create correlated failure — a disruption hits multiple product lines at once. Write empty string if only 1 product or file was analysed.",
   "needs_research": "2 paragraphs: summarise the entries that require further research (Company Exists + Supply Ties confirmed but component unverified). Name specific companies if present. Recommend concrete next steps — targeted web searches, direct outreach, or procurement team verification. Write empty string if the list is empty."
 }}"""
@@ -614,7 +630,7 @@ Return ONLY valid JSON (no markdown, no code fences) with these exact keys:
         return {
             "executive_summary": raw,
             "geo_concentration": "", "key_components": "", "hub_companies": "",
-            "bottlenecks": "", "cross_product": "", "needs_research": "",
+            "bottlenecks": "", "circular_relationships": "", "cross_product": "", "needs_research": "",
         }
     return parsed
 
@@ -692,8 +708,8 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
     doc.add_heading("1. Executive Summary", level=1)
     doc.add_paragraph(narrative.get("executive_summary", ""))
 
-    # ── Geopolitical Concentration ───────────────────────────────────────────
-    doc.add_heading("2. Geopolitical Concentration", level=1)
+    # ── Geographical Concentration ───────────────────────────────────────────
+    doc.add_heading("2. Geographical Concentration", level=1)
     doc.add_paragraph(narrative.get("geo_concentration", ""))
 
     if metrics["country_concentration"]:
@@ -761,8 +777,36 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows):  # noqa: C901
         _ct(row[1], entry["centrality_score"])
     doc.add_paragraph()
 
-    # ── Cross-product overlap ────────────────────────────────────────────────
+    # ── Circular Relationships ───────────────────────────────────────────────
     next_sec = 6
+    if metrics.get("circular_pairs"):
+        doc.add_heading(f"{next_sec}. Circular Supply Relationships", level=1)
+        narr_circ = narrative.get("circular_relationships", "")
+        if narr_circ:
+            doc.add_paragraph(narr_circ)
+        doc.add_paragraph(
+            "The following company pairs have a mutual supply relationship "
+            "(A supplies B and B supplies A). These warrant further investigation."
+        )
+        tbl = doc.add_table(rows=1, cols=3)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["Company A", "Company B", "Note"], "B71C1C")
+        for entry in metrics["circular_pairs"]:
+            row = tbl.add_row().cells
+            label_a = f"⚠ {entry['company_a']}" if entry.get("inferred") else entry["company_a"]
+            label_b = f"⚠ {entry['company_b']}" if entry.get("inferred") else entry["company_b"]
+            _ct(row[0], label_a)
+            _ct(row[1], label_b)
+            note = "Model inference" if entry.get("inferred") else "Circular dependency"
+            _ct(row[2], note)
+            if entry.get("inferred"):
+                _set_bg(row[2], "FFFDE7")
+            else:
+                _set_bg(row[2], "FFEBEE")
+        doc.add_paragraph()
+        next_sec += 1
+
+    # ── Cross-product overlap ────────────────────────────────────────────────
     if metrics["cross_product_suppliers"]:
         doc.add_heading(f"{next_sec}. Cross-Product Supplier Overlap", level=1)
         doc.add_paragraph(narrative.get("cross_product", ""))
@@ -894,12 +938,14 @@ def insights_page():
 <html>
 <head>
   <title>Supply Chain Insights</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@800&display=swap" rel="stylesheet">
   <style>
+    .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem;letter-spacing:-.02em}
+    .logo span{color:#e8ff47}
     body { font-family: monospace; padding: 2rem; background: #111; color: #eee; }
     h2 span { color: #e8ff47; }
     p.desc { color: #aaa; font-size: .88rem; max-width: 700px; line-height: 1.7; margin-bottom: 1.2rem; }
     p.desc strong { color: #eee; }
-    input[type=file] { margin: 1rem 0; display: block; color: #eee; }
     button { background: #333; color: #eee; border: 1px solid #555; padding: .5rem 1.5rem;
              cursor: pointer; font-family: monospace; font-size: .9rem; }
     button:hover { background: #444; }
@@ -912,9 +958,20 @@ def insights_page():
     .log-line { color: #888; font-size: .78rem; }
     #timer { display: none; font-size: .85rem; color: #e8ff47; margin-top: .75rem; letter-spacing: .05em; }
     #timer span { font-weight: bold; }
+    #file-list { margin: .75rem 0; display: flex; flex-direction: column; gap: .35rem; min-height: 1.5rem; }
+    .file-row { display: flex; align-items: center; gap: .75rem; padding: .4rem .65rem; background: #1a1a1a; border: 1px solid #333; border-radius: 3px; }
+    .file-name { flex: 1; font-size: .83rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-size { color: #555; font-size: .75rem; flex-shrink: 0; }
+    .remove-btn { background: none; border: none; color: #555; cursor: pointer; padding: 0 2px; font-size: .85rem; line-height: 1; flex-shrink: 0; font-family: monospace; }
+    .remove-btn:hover:not(:disabled) { color: #f44336; }
+    #addBtn { background: #1a2a1a; color: #4caf50; border: 1px dashed #2e5c2e; padding: .35rem 1rem; font-size: .82rem; font-family: monospace; cursor: pointer; }
+    #addBtn:hover:not(:disabled) { background: #213321; }
   </style>
 </head>
 <body>
+  <div class="logo" style="margin-bottom:1.5rem">
+    <img src="/static/images/nusW-tliap_transparent_bg.png" width="320" height="80" style="vertical-align:middle"> Supplier<span>Map</span>
+  </div>
   <h2>Supply Chain <span>Insights</span></h2>
   <p class="desc">
     Upload one or more verified Excel files (.xlsx) exported from the verification pipeline.<br><br>
@@ -924,8 +981,13 @@ def insights_page():
     All other rows are excluded.
   </p>
 
-  <input type="file" id="fileInput" accept=".xlsx" multiple>
-  <button id="genBtn" onclick="generateInsights()">Generate Report</button>
+  <div id="file-list"><div style="color:#555;font-size:.82rem;padding:.3rem 0">No files added.</div></div>
+  <input type="file" id="hiddenInput" accept=".xlsx" multiple style="display:none" onchange="addFiles(this.files)">
+  <button id="addBtn" onclick="document.getElementById('hiddenInput').click()">+ Add Files</button>
+
+  <div style="margin-top:1rem">
+    <button id="genBtn" onclick="generateInsights()">▶ Generate Report</button>
+  </div>
 
   <div id="timer">⏱ Elapsed: <span id="timerVal">0.0s</span></div>
   <div id="log-container"><div id="log"></div></div>
@@ -934,16 +996,53 @@ def insights_page():
     const log          = document.getElementById('log');
     const logContainer = document.getElementById('log-container');
 
-    function append(msg, cls) {
+    const append = (msg, cls) => {
       const d = document.createElement('div');
       if (cls) d.className = cls;
       d.textContent = msg;
       log.appendChild(d);
       logContainer.scrollTop = logContainer.scrollHeight;
-    }
+    };
 
+    let fileQueue     = [];
     let timerInterval = null, timerStart = null;
 
+    // ── file queue management ────────────────────────────────────────────────
+    function addFiles(newFiles) {
+      for (const f of newFiles) {
+        if (!fileQueue.some(q => q.name === f.name && q.size === f.size))
+          fileQueue.push(f);
+      }
+      renderFileList();
+      document.getElementById('hiddenInput').value = '';
+    }
+
+    function removeFile(idx) {
+      fileQueue.splice(idx, 1);
+      renderFileList();
+    }
+
+    function renderFileList() {
+      const list = document.getElementById('file-list');
+      if (!fileQueue.length) {
+        list.innerHTML = '<div style="color:#555;font-size:.82rem;padding:.3rem 0">No files added.</div>';
+        return;
+      }
+      list.innerHTML = fileQueue.map((f, i) => `
+        <div class="file-row" id="file-row-${i}">
+          <button class="remove-btn" onclick="removeFile(${i})">✕</button>
+          <span class="file-name">${f.name}</span>
+          <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
+        </div>`).join('');
+    }
+
+    function setRunning(running) {
+      document.getElementById('genBtn').disabled  = running;
+      document.getElementById('addBtn').disabled  = running;
+      document.querySelectorAll('.remove-btn').forEach(b => b.disabled = running);
+    }
+
+    // ── timer ────────────────────────────────────────────────────────────────
     function startTimer() {
       timerStart = Date.now();
       document.getElementById('timer').style.display = 'block';
@@ -962,17 +1061,17 @@ def insights_page():
         ((Date.now() - timerStart) / 1000).toFixed(1) + 's ✓';
     }
 
+    // ── generate ─────────────────────────────────────────────────────────────
     async function generateInsights() {
-      const files = document.getElementById('fileInput').files;
-      if (!files.length) { append('⚠️ Please select at least one .xlsx file.'); return; }
+      if (!fileQueue.length) { append('⚠️ Add at least one .xlsx file first.'); return; }
 
-      document.getElementById('genBtn').disabled = true;
       log.innerHTML = '';
-      append(`Uploading ${files.length} file(s)…`);
+      setRunning(true);
+      append('Uploading ' + fileQueue.length + ' file(s)…');
       startTimer();
 
       const fd = new FormData();
-      for (const f of files) fd.append('files', f);
+      for (const f of fileQueue) fd.append('files', f);
 
       let streamId;
       try {
@@ -980,51 +1079,42 @@ def insights_page():
         const data = await res.json();
         if (data.error) {
           append('Error: ' + data.error, 'error');
-          stopTimer();
-          document.getElementById('genBtn').disabled = false;
-          return;
+          stopTimer(); setRunning(false); return;
         }
         streamId = data.stream_id;
-      } catch (e) {
+      } catch(e) {
         append('Upload failed: ' + e, 'error');
-        stopTimer();
-        document.getElementById('genBtn').disabled = false;
-        return;
+        stopTimer(); setRunning(false); return;
       }
 
       append('Files received — running analysis…');
-      const evtSource = new EventSource(`/api/insights/stream/${streamId}`);
+      const es = new EventSource('/api/insights/stream/' + streamId);
 
-      evtSource.onmessage = (e) => {
+      es.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'status') {
           append(msg.message);
         } else if (msg.type === 'log') {
           append(msg.message, msg.is_error ? 'error' : 'log-line');
         } else if (msg.type === 'error') {
-          stopTimer();
+          stopTimer(); setRunning(false);
           append('Error: ' + msg.message, 'error');
-          evtSource.close();
-          document.getElementById('genBtn').disabled = false;
+          es.close();
         } else if (msg.type === 'stream_end') {
-          stopTimer();
-          evtSource.close();
-          document.getElementById('genBtn').disabled = false;
+          stopTimer(); setRunning(false);
+          es.close();
           const a = document.createElement('a');
-          a.href     = `/api/insights/download/${streamId}`;
+          a.href = '/api/insights/download/' + streamId;
           a.download = '';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
           append('✓ Report downloaded.', 'done');
         }
       };
 
-      evtSource.onerror = () => {
-        stopTimer();
+      es.onerror = () => {
+        stopTimer(); setRunning(false);
         append('SSE connection lost.', 'error');
-        evtSource.close();
-        document.getElementById('genBtn').disabled = false;
+        es.close();
       };
     }
   </script>

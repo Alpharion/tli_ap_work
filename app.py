@@ -42,6 +42,7 @@ PROVIDER = "gemini" # anthropic | openai | gemini | deepseek
 
 _export_files      = {}
 _export_files_lock = threading.Lock()
+_active_cancel     = threading.Event()   # set to stop the current map pipeline run
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -90,8 +91,10 @@ def map_suppliers():
 
     queue, done = [], threading.Event()
 
+    _active_cancel.clear()
+
     def run():
-        try: run_pipeline(product, depth, provider, queue, [], {}, is_pharma=is_pharma)
+        try: run_pipeline(product, depth, provider, queue, [], {}, is_pharma=is_pharma, cancel_event=_active_cancel)
         except Exception as e: queue.append({"type": "error", "message": str(e)})
         finally: done.set()
 
@@ -112,6 +115,12 @@ def map_suppliers():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.route("/api/map/cancel", methods=["POST"])
+def map_cancel():
+    _active_cancel.set()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/map_all")
 def map_all():
     collected_oems  = []
@@ -126,20 +135,27 @@ def map_all():
 
     queue, done = [], threading.Event()
 
+    _active_cancel.clear()
+
     def run():
         try:
             queue.append({"type": "status", "message": "⚡Beginning series of pipeline runs."})
             for provider in providers:
+                if _active_cancel.is_set():
+                    break
                 if not provider.get("configured"):
                     queue.append({"type": "status", "message": f"✅ Skipping {provider.get('name')} due to lack of API key"})
                 else:
                     provider_id = provider.get("id")
                     queue.append({"type": "provider_start", "provider": provider["id"], "name": provider["name"],
                                   "message": f"Starting Pipeline with {provider['name']}"})
-                    run_pipeline(product, depth, provider_id, queue, collected_oems, collected_tiers, is_pharma=is_pharma)
+                    run_pipeline(product, depth, provider_id, queue, collected_oems, collected_tiers, is_pharma=is_pharma, cancel_event=_active_cancel)
+                    if _active_cancel.is_set():
+                        break
                     queue.append({"type": "provider_done", "provider": provider["id"], "name": provider["name"],
                                   "message": f"{provider['name']} pipeline complete."})
-            queue.append({"type": "status", "message": "✅ Completed series of pipeline executions."})
+            if not _active_cancel.is_set():
+                queue.append({"type": "status", "message": "✅ Completed series of pipeline executions."})
         except Exception as e:
             queue.append({"type": "error", "message": str(e)})
         finally:
@@ -173,8 +189,10 @@ def map_agentic():
 
     queue, done = [], threading.Event()
 
+    _active_cancel.clear()
+
     def run():
-        try: run_agentic_pipeline(product, depth, queue, [], {}, is_pharma=is_pharma)
+        try: run_agentic_pipeline(product, depth, queue, [], {}, is_pharma=is_pharma, cancel_event=_active_cancel)
         except Exception as e: queue.append({"type": "error", "message": str(e)})
         finally: done.set()
 

@@ -127,37 +127,81 @@ def write_index_sheet(ws, results: list[dict], run_meta: dict):
     )
 
 
+HDR_REG = _fill("4A148C")
+
+REG_STATUS_FILL = {
+    "approved":  _fill("C8E6C9"),
+    "registered": _fill("C8E6C9"),
+    "pending":   _fill("FFF9C4"),
+    "not found": _fill("FFCDD2"),
+    "unknown":   _fill("F5F5F5"),
+}
+
+
 def write_oem_sheet(ws, results: list[dict]):
-    headers = ["Product", "Company Name", "Country", "Role", "Market Share",
-               "Market Share %", "Market Share Source", "Market Rank",
-               "Confidence", "Notes", "AI Provider", "Flagged"]
-    col_widths = [28, 26, 14, 22, 12, 14, 28, 12, 11, 35, 14, 10]
+    base_headers = ["Product", "Company Name", "Country", "Role", "Market Share",
+                    "Market Share %", "Market Share Source", "Market Rank",
+                    "Confidence", "Notes", "AI Provider", "Flagged"]
+    reg_headers  = ["Regulatory Body", "Region", "Status", "Details", "Confidence (Reg)"]
+    headers      = base_headers + reg_headers
+    col_widths   = [28, 26, 14, 22, 12, 14, 28, 12, 11, 35, 14, 10, 18, 14, 14, 40, 12]
     set_col_widths(ws, col_widths)
 
-    for ci, h in enumerate(headers, 1):
+    for ci, h in enumerate(base_headers, 1):
         hdr_cell(ws, 1, ci, h, HDR_OEM)
+    for ci, h in enumerate(reg_headers, len(base_headers) + 1):
+        hdr_cell(ws, 1, ci, h, HDR_REG)
     ws.row_dimensions[1].height = 24
 
     row = 2
     for r in results:
         for prov_id, prov_sc in r.get("provider_results", {r.get("provider", "unknown"): r.get("supply_chain", {})}).items():
             product_name = prov_sc.get("product", {}).get("product_name", r["product_input"])
+
+            # build lookup: company_name (lowercase) → list of regulatory body dicts
+            reg_lookup = {}
+            for entry in prov_sc.get("regulatory", []):
+                key = entry.get("company_name", "").strip().lower()
+                if key:
+                    reg_lookup[key] = entry.get("regulatory_bodies", [])
+
             for oem in prov_sc.get("oems", []):
                 fill = _row_fill(row)
                 rank = oem.get("market_rank", "")
-                data_cell(ws, row, 1,  product_name,                           bold=True, fill=fill)
-                data_cell(ws, row, 2,  oem.get("company_name", ""),            fill=fill)
-                data_cell(ws, row, 3,  oem.get("country", ""),                 fill=fill)
-                data_cell(ws, row, 4,  oem.get("role", ""),                    fill=fill)
-                data_cell(ws, row, 5,  oem.get("market_share", ""),            fill=fill)
-                data_cell(ws, row, 6,  oem.get("market_share_pct", ""),        fill=fill)
-                data_cell(ws, row, 7,  oem.get("market_share_source", ""),     fill=fill)
-                data_cell(ws, row, 8,  "" if rank == 99 else rank,             fill=fill)
-                data_cell(ws, row, 9,  oem.get("confidence", ""),              fill=fill)
-                data_cell(ws, row, 10, oem.get("notes", ""),                   fill=fill)
-                data_cell(ws, row, 11, prov_id,                                fill=fill)
-                data_cell(ws, row, 12, str(oem.get("flagged", False)),         fill=fill)
-                row += 1
+
+                oem_name   = oem.get("company_name", "")
+                reg_bodies = reg_lookup.get(oem_name.strip().lower(), [])
+
+                def _write_oem_base(r_idx, fill):
+                    data_cell(ws, r_idx, 1,  product_name,                        bold=True, fill=fill)
+                    data_cell(ws, r_idx, 2,  oem_name,                            fill=fill)
+                    data_cell(ws, r_idx, 3,  oem.get("country", ""),              fill=fill)
+                    data_cell(ws, r_idx, 4,  oem.get("role", ""),                 fill=fill)
+                    data_cell(ws, r_idx, 5,  oem.get("market_share", ""),         fill=fill)
+                    data_cell(ws, r_idx, 6,  oem.get("market_share_pct", ""),     fill=fill)
+                    data_cell(ws, r_idx, 7,  oem.get("market_share_source", ""),  fill=fill)
+                    data_cell(ws, r_idx, 8,  "" if rank == 99 else rank,          fill=fill)
+                    data_cell(ws, r_idx, 9,  oem.get("confidence", ""),           fill=fill)
+                    data_cell(ws, r_idx, 10, oem.get("notes", ""),                fill=fill)
+                    data_cell(ws, r_idx, 11, prov_id,                             fill=fill)
+                    data_cell(ws, r_idx, 12, str(oem.get("flagged", False)),      fill=fill)
+
+                if not reg_bodies:
+                    # non-pharma or no regulatory data — single row, reg columns blank
+                    _write_oem_base(row, fill)
+                    row += 1
+                else:
+                    # pharma — one row per regulatory body
+                    for body in reg_bodies:
+                        status   = body.get("status", "unknown").lower()
+                        reg_fill = REG_STATUS_FILL.get(status, REG_STATUS_FILL["unknown"])
+                        _write_oem_base(row, fill)
+                        data_cell(ws, row, 13, body.get("body", ""),       fill=reg_fill)
+                        data_cell(ws, row, 14, body.get("country", ""),    fill=reg_fill)
+                        data_cell(ws, row, 15, body.get("status", ""),     fill=reg_fill)
+                        data_cell(ws, row, 16, body.get("details", ""),    fill=reg_fill)
+                        data_cell(ws, row, 17, body.get("confidence", ""), fill=reg_fill)
+                        row += 1
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row - 1}"

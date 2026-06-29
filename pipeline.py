@@ -9,7 +9,7 @@ Exports:
 import datetime
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as futures_wait, ALL_COMPLETED
 
 from ai import call_ai, safe_parse_json, get_evidence, _source_url_cache
 from coords import get_coords
@@ -97,8 +97,9 @@ Return ONLY a JSON array with exactly 7 objects in this order (FDA, EMA, TGA, HS
         return _default
 
 
-def run_pipeline(product_input: str, depth: int, provider: str, queue: list, oem_context: list, collected_tiers: dict, is_pharma: bool = False):
+def run_pipeline(product_input: str, depth: int, provider: str, queue: list, oem_context: list, collected_tiers: dict, is_pharma: bool = False, cancel_event=None):
     def push(t, **kw): queue.append({"type": t, **kw})
+    def cancelled(): return cancel_event is not None and cancel_event.is_set()
 
     search_label = "Google Search" if provider == "gemini" else "DuckDuckGo"
     push("status", message=f"🤖 Provider: {provider} | 🔍 Search: {search_label}")
@@ -356,6 +357,10 @@ Rank 1=largest. Only include companies from the known OEMs list."""
     push("oem_discovered", oems=oem_list)
     push("status", message=f"✅ Found {len(oem_list)} OEM manufacturer(s)")
 
+    if cancelled():
+        push("cancelled", message="⛔ Search stopped by user.")
+        return
+
     regulatory_by_oem = []
     if is_pharma and oem_list:
         pname = product_info.get("product_name", product_input)
@@ -400,6 +405,9 @@ Rank 1=largest. Only include companies from the known OEMs list."""
         )
 
     for tier_num in range(1, depth + 1):
+        if cancelled():
+            push("cancelled", message="⛔ Search stopped by user.")
+            return
         push("status", message=f"🏭 Researching Tier-{tier_num} suppliers…")
         tier_suppliers = []
         next_parents   = []
@@ -416,6 +424,7 @@ Rank 1=largest. Only include companies from the known OEMs list."""
             previous_parents = filtered
 
         for parent_info in previous_parents:
+            if cancelled(): break
             parent   = parent_info["name"]
             oem_root = parent_info["oem_root"]
             if not parent or parent.lower() == "unknown":
@@ -640,7 +649,7 @@ Reply ONLY with a JSON object:
         }
 
 
-def run_agentic_pipeline(product_input: str, depth: int, queue: list, oem_context: list, collected_tiers: dict, is_pharma: bool = False):
+def run_agentic_pipeline(product_input: str, depth: int, queue: list, oem_context: list, collected_tiers: dict, is_pharma: bool = False, cancel_event=None):
     """
     Dual-model agentic pipeline.
     - Gemini   → non-China companies at every level
@@ -651,6 +660,7 @@ def run_agentic_pipeline(product_input: str, depth: int, queue: list, oem_contex
     Aborts immediately if DDG rate-limits the session.
     """
     def push(t, **kw): queue.append({"type": t, **kw})
+    def cancelled(): return cancel_event is not None and cancel_event.is_set()
 
     def _format_evidence(results: list) -> str:
         if not results:
@@ -683,21 +693,30 @@ def run_agentic_pipeline(product_input: str, depth: int, queue: list, oem_contex
         return result
 
     def _run_parallel(gemini_prompt: str, deepseek_prompt: str, max_tokens: int, label: str):
-        """Fire both LLM calls in parallel; return (gemini_list, deepseek_list)."""
+        """Fire both LLM calls in parallel; return (gemini_list, deepseek_list).
+        Polls cancel_event every second so stop requests are responsive."""
         g_found, d_found = [], []
         with ThreadPoolExecutor(max_workers=2) as ex:
             fut_g = ex.submit(call_ai, gemini_prompt,   "gemini",   max_tokens)
             fut_d = ex.submit(call_ai, deepseek_prompt, "deepseek", max_tokens)
-            try:
-                g_found = _parse_list(fut_g.result())
-                push("status", message=f"  🌍 Gemini {label}: {len(g_found)} result(s)")
-            except Exception as e:
-                push("status", message=f"  ⚠️ Gemini {label} failed: {e}")
-            try:
-                d_found = _parse_list(fut_d.result())
-                push("status", message=f"  🇨🇳 DeepSeek {label}: {len(d_found)} result(s)")
-            except Exception as e:
-                push("status", message=f"  ⚠️ DeepSeek {label} failed: {e}")
+            pending = {fut_g, fut_d}
+            while pending:
+                if cancelled():
+                    return [], []
+                done, pending = futures_wait(pending, timeout=1.0)
+                for fut in done:
+                    if fut is fut_g:
+                        try:
+                            g_found = _parse_list(fut.result())
+                            push("status", message=f"  🌍 Gemini {label}: {len(g_found)} result(s)")
+                        except Exception as e:
+                            push("status", message=f"  ⚠️ Gemini {label} failed: {e}")
+                    else:
+                        try:
+                            d_found = _parse_list(fut.result())
+                            push("status", message=f"  🇨🇳 DeepSeek {label}: {len(d_found)} result(s)")
+                        except Exception as e:
+                            push("status", message=f"  ⚠️ DeepSeek {label} failed: {e}")
         return g_found, d_found
 
     push("status", message="🤖 Agentic Mode | 🌍 Gemini (non-China) + 🇨🇳 DeepSeek (China) | 🔍 DDG Search")
@@ -849,6 +868,10 @@ List 2–8 significant OEMs as SEPARATE array elements."""
     push("oem_discovered", oems=oem_list)
     push("status", message=f"✅ Found {len(oem_list)} OEM manufacturer(s)")
 
+    if cancelled():
+        push("cancelled", message="⛔ Search stopped by user.")
+        return
+
     regulatory_by_oem = []
     if is_pharma and oem_list:
         pname = product_info.get("product_name", product_input)
@@ -901,6 +924,9 @@ List 2–8 significant OEMs as SEPARATE array elements."""
 
     # ── Step 3: Tier Discovery ────────────────────────────────────────────────
     for tier_num in range(1, depth + 1):
+        if cancelled():
+            push("cancelled", message="⛔ Search stopped by user.")
+            return
         push("status", message=f"🏭 Tier-{tier_num}: Gemini (non-China) + DeepSeek (China) in parallel…")
         tier_suppliers = []
         next_parents   = []
@@ -916,6 +942,7 @@ List 2–8 significant OEMs as SEPARATE array elements."""
             previous_parents = filtered
 
         for parent_info in previous_parents:
+            if cancelled(): break
             parent   = parent_info["name"]
             oem_root = parent_info["oem_root"]
             if not parent or parent.lower() == "unknown":

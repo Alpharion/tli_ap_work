@@ -56,6 +56,8 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
 .btn-agentic{background:var(--accent2);color:#0a0b0f;border:none;font-family:'Syne',sans-serif;font-weight:800;font-size:.82rem;letter-spacing:.05em;padding:12px 28px;border-radius:3px;cursor:pointer;transition:transform .15s,box-shadow .15s;white-space:nowrap;height:46px}
 .btn-agentic:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(71,200,255,.3)}
 .btn-agentic:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-stop{background:#5c1a1a;color:#ff7070;border:1px solid #a33;font-family:'Space Mono',monospace;font-size:.72rem;letter-spacing:.05em;padding:12px 20px;border-radius:3px;cursor:pointer;height:46px;white-space:nowrap;margin-left:auto}
+.btn-stop:hover{background:#7a2020;color:#ffaaaa}
 
 /* log */
 .status-log{background:var(--bg1);border:1px solid var(--border);border-radius:3px;padding:14px;margin-top:18px;max-height:130px;overflow-y:auto;display:none}
@@ -241,8 +243,8 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
     <div class="tagline">Supply Chain Intelligence</div>
   </div>
   <div style="display:flex;align-items:center;gap:12px">
-    <a class="nav-btn" href="/dev/verify">🔍 Verify Suppliers</a>
-    <a class="nav-btn" href="/dev/insights">💡 Insights</a>
+    <a class="nav-btn" href="/dev/verify" target="_blank" rel="noopener">🔍 Verify Suppliers</a>
+    <a class="nav-btn" href="/dev/insights" target="_blank" rel="noopener">💡 Insights</a>
     <div style="font-size:.62rem;color:var(--muted);text-align:right">Powered by web crawling + AI<br><span style="color:var(--accent)">● LIVE</span></div>
   </div>
 </header>
@@ -272,7 +274,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
           
         </select>
       </div>
-      <div class="field" style="max-width:210px;min-width:175px">
+      <div class="field" id="providerField" style="max-width:210px;min-width:175px">
         <label>AI Provider</label>
         <select id="providerSelect">
           <option value="anthropic">⚪ Anthropic Claude</option>
@@ -284,6 +286,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
       </div>
       <button class="btn-map" id="mapBtn" onclick="startMapping()">▶ MAP CHAIN</button>
       <button class="btn-agentic" id="agenticBtn" onclick="startAgenticMapping()">⚡ MAP AGENTIC</button>
+      <button class="btn-stop" id="stopMainBtn" onclick="stopCurrentRun()" style="display:none">⛔ STOP</button>
     </div>
     <label class="pharma-check">
       <input type="checkbox" id="isPharmaCheck">
@@ -340,9 +343,9 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
       <!-- Legend — 2-col, raised above OSM footer -->
       <div class="map-legend">
         <div class="legend-title">Supply Chain</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#d50c0c;border:2px solid #ffe550"></div>OEM</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#d50c0c"></div>OEM</div>
         <div class="legend-item"><div class="legend-dot" style="background:#47c8ff"></div>Tier 1</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#e8ff47"></div>Tier 2</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#AA6B39"></div>Tier 2</div>
         <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div>Tier 3</div>
         <!--<div class="legend-item"><div class="legend-dot" style="background:#fb923c"></div>Tier 4</div>-->
         <div class="legend-item"><div class="legend-dash" style="border-color:#47c8ff"></div>Supply link</div>
@@ -368,7 +371,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
           <input type="checkbox" id="heat1" onchange="toggleHeat('tier_1',this.checked)">
         </label>
         <label class="heat-toggle">
-          <span class="heat-swatch" style="background:#e8ff47"></span>
+          <span class="heat-swatch" style="background:#AA6B39"></span>
           <span class="heat-label">Tier 2 only</span>
           <input type="checkbox" id="heat2" onchange="toggleHeat('tier_2',this.checked)">
         </label>
@@ -400,7 +403,7 @@ header{position:relative;z-index:10;border-bottom:1px solid var(--border);paddin
             <span class="fb-dot" style="background:#47c8ff"></span>Tier 1
           </button>
           <button class="filter-btn" id="fbT2" data-tier="2" onclick="filterTier(2)">
-            <span class="fb-dot" style="background:#e8ff47"></span>Tier 2
+            <span class="fb-dot" style="background:#AA6B39"></span>Tier 2
           </button>
           <button class="filter-btn" id="fbT3" data-tier="3" onclick="filterTier(3)">
             <span class="fb-dot" style="background:#a78bfa"></span>Tier 3
@@ -448,6 +451,7 @@ const PROVIDER_META = {
 };
 
 let evtSrc = null;
+let currentDone = null;
 let lmap = null;
 const nodeReg = {};
 let oemMarker = null;
@@ -538,14 +542,14 @@ function addNode(lat, lng, label, color, tier, popupHtml, jitter=true) {
   const m = L.circleMarker([jlat, jlng], {
     radius: r,
     fillColor: color,
-    color: tier===0 ? '#ffe550' : 'rgba(0,0,0,0.5)',
-    weight: tier===0 ? 2.5 : 1,
+    color: 'rgba(0,0,0,0.5)',
+    weight: 1,
     fillOpacity: 0.9
   }).addTo(lmap);
   m.bindPopup(popupHtml, {maxWidth:270});
   m.bindTooltip(label, {direction:'top'});
   m.on('click', () => focusNode(key));
-  return { marker:m, lat:jlat, lng:jlng };
+  return { marker:m, lat:jlat, lng:jlng, baseRadius:r };
 }
 
 const edgeReg = [];
@@ -620,7 +624,7 @@ function focusNode(key) {
       opacity:     isHighlighted ? 1    : 0.05,
       weight:      isFocus ? 3 : 1,
       color:       isFocus ? '#ffffff' : 'rgba(0,0,0,0.5)',
-      radius:      isFocus ? (n.marker.options.radius * 1.4) : n.marker.options.radius
+      radius:      isFocus ? (n.baseRadius * 1.4) : n.baseRadius
     });
   });
 }
@@ -641,7 +645,7 @@ function clearFocus() {
       opacity: 1,
       weight: 1,
       color: 'rgba(0,0,0,0.5)',
-      radius: n.marker.options.radius  // restore original
+      radius: n.baseRadius
     });
   });
 }
@@ -772,7 +776,7 @@ function renderProduct(p) {
   if (p.lat && p.lng) {
     const popup=`<div class="pu-name">${p.product_name}</div>
       <div class="pu-country">📍 ${p.oem_country||''}</div>
-      <div class="pu-tier" style="color:#e8ff47;border-color:#e8ff47">OEM</div>
+      <div class="pu-tier" style="color:#d50c0c;border-color:#d50c0c">OEM</div>
       <div class="pu-comps">${p.oem_manufacturer||''}</div>`;
     const node = addNode(p.lat, p.lng, p.product_name, '#ffffff', 0, popup, false);
     if (node) {
@@ -1485,6 +1489,13 @@ function resetAllProviderStatus() {
   ['anthropic','openai','gemini','deepseek'].forEach(id => setProviderStatus(id, 'ready'));
 }
 
+function stopCurrentRun() {
+  appendLog('⛔ Search stopped by user.', false);
+  document.getElementById('stopMainBtn').style.display = 'none';
+  fetch('/api/map/cancel', { method: 'POST' }).catch(() => {});
+  if (currentDone) { const d = currentDone; currentDone = null; d(); }
+}
+
 function startMapping() {
   const product = document.getElementById('productInput').value.trim();
   const depth = parseInt(document.getElementById('depthSelect').value);
@@ -1493,7 +1504,8 @@ function startMapping() {
   reset();
   const btn=document.getElementById('mapBtn');
   btn.disabled=true; btn.innerHTML='<span class="spinner"></span>MAPPING…';
-  document.getElementById('agenticBtn').disabled=true;
+  document.getElementById('agenticBtn').style.display='none';
+  document.getElementById('stopMainBtn').style.display='inline-block';
   // declare provider FIRST before any usage
   const provider=document.getElementById('providerSelect').value;
   const isAll = provider === "all";
@@ -1579,12 +1591,15 @@ function startMapping() {
   const done = () => {
     btn.disabled=false;
     btn.innerHTML='▶ MAP CHAIN';
-    document.getElementById('agenticBtn').disabled=false;
+    document.getElementById('agenticBtn').style.display='';
+    document.getElementById('stopMainBtn').style.display='none';
     if(evtSrc){evtSrc.close();evtSrc=null;}
+    currentDone=null;
     stopTimer();
     const _p = document.getElementById('providerSelect').value;
     if (_p && _p !== 'all') setProviderStatus(_p, 'done');
   };
+  currentDone = done;
 }
 
 function startAgenticMapping() {
@@ -1596,7 +1611,11 @@ function startAgenticMapping() {
   const btn    = document.getElementById('agenticBtn');
   const mapBtn = document.getElementById('mapBtn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>MAPPING…';
-  mapBtn.disabled = true;
+  mapBtn.style.display = 'none';
+  document.getElementById('providerField').style.display = 'none';
+  document.getElementById('stopMainBtn').style.display = 'inline-block';
+  setProviderStatus('gemini', 'working');
+  setProviderStatus('deepseek', 'working');
   appendLog(`⚡ Agentic Mapping: "${product}" (depth: ${depth}) — Gemini (non-China) + DeepSeek (China)`);
   startTimer();
   const isPharmaAgentic = document.getElementById('isPharmaCheck').checked;
@@ -1646,10 +1665,16 @@ function startAgenticMapping() {
   evtSrc.onerror = () => { appendLog('❌ Connection lost. Is app.py running on port 5000?', false); done(); };
   const done = () => {
     btn.disabled = false; btn.innerHTML = '⚡ MAP AGENTIC';
-    mapBtn.disabled = false;
+    mapBtn.style.display = '';
+    document.getElementById('providerField').style.display = '';
+    document.getElementById('stopMainBtn').style.display = 'none';
+    setProviderStatus('gemini', 'done');
+    setProviderStatus('deepseek', 'done');
     if (evtSrc) { evtSrc.close(); evtSrc = null; }
+    currentDone = null;
     stopTimer();
   };
+  currentDone = done;
 }
 
 // event listener for enter

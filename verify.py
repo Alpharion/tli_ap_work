@@ -23,6 +23,7 @@ from flask import Blueprint, Response, jsonify, request, send_file
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from ai import call_ai, safe_parse_json
+from audit import ai_audit_row, write_audit_headers, write_audit_row, AUDIT_COL_COUNT
 from scraper import web_search
 
 # ── _export_files is imported from app at call-time to avoid circular imports ─
@@ -153,28 +154,21 @@ Only set a field to false if neither the web evidence nor your training knowledg
 
 
 
-def verify_supplier_row(company_name: str, supplies_to: str, components: str, provider: str, log_fn=None) -> dict:
+def verify_supplier_row(
+    company_name: str,
+    supplies_to: str,
+    components: str,
+    provider: str,
+    log_fn=None,
+    use_auditor: bool = False,
+    audit_provider: str = "",
+) -> dict:
     """
-    Run three web searches with a shared browser, combine all evidence, and send to
-    the LLM in a single call covering all 3 verification questions.
-
-    Returns:
-        {
-            "company_exists":     "Yes" | "No",
-            "supply_ties":        "Yes" | "No",
-            "correct_component":  "Yes" | "No",
-            "notes":              str,
-            "urls":               [str],
-        }
+    Run three web searches, combine evidence, call Stage 1 LLM.
+    If use_auditor=True, call _ai_audit_row() with the same evidence for Stage 2.
     """
     _log = _make_logger(log_fn)
     component_query = components[:120] if components else "components"
-    all_results: list[dict] = []
-    verdict = {
-        "company_exists": False, "supply_ties": False, "correct_component": False,
-        "source_exists": "training_knowledge", "source_supply": "training_knowledge", "source_component": "training_knowledge",
-        "notes_exists": "Browser error", "notes_supply": "Browser error", "notes_component": "Browser error",
-    }
 
     # ── 3 broad searches via DDG + Crawl4AI ──────────────────────────────────
     r1 = web_search(f'"{company_name}" supplier manufacturer', n=10, max_scrape=4, log_fn=log_fn)
@@ -182,8 +176,9 @@ def verify_supplier_row(company_name: str, supplies_to: str, components: str, pr
     r3 = web_search(f'"{company_name}" "{component_query}" manufacture supply', n=10, max_scrape=4, log_fn=log_fn)
     all_results = r1 + r2 + r3
 
+    evidence = _build_evidence(all_results)
     _log(f"[llm] Combined evidence: {len(all_results)} page(s) scraped across 3 queries")
-    verdict = _ai_judge_all(_build_evidence(all_results), company_name, supplies_to, component_query, provider, log_fn=log_fn)
+    verdict = _ai_judge_all(evidence, company_name, supplies_to, component_query, provider, log_fn=log_fn)
 
     unique_urls = _unique_urls([r["url"] for r in all_results])
 
@@ -195,7 +190,7 @@ def verify_supplier_row(company_name: str, supplies_to: str, components: str, pr
     if verdict["notes_component"]:
         notes_parts.append(f"[Component] {verdict['notes_component']}")
 
-    return {
+    result = {
         "company_exists":    "Yes" if verdict["company_exists"] else "No",
         "supply_ties":       "Yes" if verdict["supply_ties"] else "No",
         "correct_component": "Yes" if verdict["correct_component"] else "No",
@@ -207,7 +202,23 @@ def verify_supplier_row(company_name: str, supplies_to: str, components: str, pr
         "label_supply":      "Web Evidence" if verdict["source_supply"]    == "web_evidence" else "Training Data",
         "label_component":   "Web Evidence" if verdict["source_component"] == "web_evidence" else "Training Data",
         "urls":              unique_urls,
+        # audit fields — populated below if use_auditor, otherwise empty
+        "audit_company_exists":    "",
+        "audit_supply_ties":       "",
+        "audit_correct_component": "",
+        "audit_notes_exists":      "",
+        "audit_notes_supply":      "",
+        "audit_notes_component":   "",
+        "audit_verdict":           "",
+        "audit_verdict_reason":    "",
     }
+
+    if use_auditor and audit_provider:
+        _log(f"[audit] Stage 2 audit starting for '{company_name}' via {audit_provider}")
+        audit = ai_audit_row(evidence, company_name, supplies_to, component_query, verdict, audit_provider, log_fn=log_fn)
+        result.update(audit)
+
+    return result
 
 
 # ── Workbook annotation ───────────────────────────────────────────────────────
@@ -269,7 +280,8 @@ def _finalise_sheet(ws):
     ws.auto_filter.ref = ws.dimensions
 
 
-def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> openpyxl.Workbook:
+def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str,
+                      use_auditor: bool = False, audit_provider: str = "") -> openpyxl.Workbook:
     """
     Iterate every tier sheet in the workbook, run verification per supplier row,
     and append the 5 verification columns. Pushes SSE progress events to the queue.
@@ -339,7 +351,7 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
             if col:
                 ws.column_dimensions[get_column_letter(col)].width = width
 
-        # Add 6 new columns after URL: label + source pairs for each of the 3 fields
+        # Add 6 source-tracking columns after URL
         source_start_col = (col_urls + 1) if col_urls else (ws.max_column + 1)
         _SOURCE_COLS = [
             ("Company Exists Label",             "Source Company Exists"),
@@ -354,6 +366,11 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
                 cell.fill = _HDR_FILL
                 cell.font = _HDR_FONT
                 ws.column_dimensions[cell.column_letter].width = width
+
+        # Add auditor columns after the 6 source columns (only when auditor enabled)
+        audit_start_col = source_start_col + 6
+        if use_auditor:
+            write_audit_headers(ws, audit_start_col, audit_provider)
 
         _WRAP = Alignment(wrap_text=True, vertical="top")
 
@@ -371,7 +388,10 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = {
-                executor.submit(verify_supplier_row, company, supplies_to, components, provider, log_fn): row_idx
+                executor.submit(
+                    verify_supplier_row, company, supplies_to, components, provider, log_fn,
+                    use_auditor, audit_provider
+                ): row_idx
                 for row_idx, company, supplies_to, components in rows_to_process
             }
 
@@ -412,7 +432,7 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
                     c = ws.cell(row=row_idx, column=col_urls, value=", ".join(result["urls"]))
                     c.alignment = Alignment(wrap_text=False, vertical="top")
 
-                # Write 6 new columns: label + source pairs
+                # Write 6 source-tracking columns: label + notes pairs
                 for j, (notes_key, label_key) in enumerate([
                     ("notes_exists",    "label_exists"),
                     ("notes_supply",    "label_supply"),
@@ -422,6 +442,10 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
                     c.alignment = _WRAP
                     c = ws.cell(row=row_idx, column=source_start_col + j * 2 + 1, value=result[notes_key])
                     c.alignment = _WRAP
+
+                # Write 6 auditor columns when enabled
+                if use_auditor:
+                    write_audit_row(ws, row_idx, audit_start_col, result)
 
                 push({"type": "log", "message": f"[excel] Row {row_idx} written — exists={result['company_exists']}, supply={result['supply_ties']}, component={result['correct_component']}", "is_error": False})
 
@@ -456,7 +480,8 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str) -> o
 
 # ── Background worker ─────────────────────────────────────────────────────────
 
-def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider: str):
+def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider: str,
+                      use_auditor: bool = False, audit_provider: str = ""):
     """Background thread: load workbook, annotate, save, signal file_ready."""
     from app import _export_files, _export_files_lock
 
@@ -477,7 +502,7 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
             _snapshot_store[stream_id] = snap_path
 
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-        wb = annotate_workbook(wb, stream_id, provider)
+        wb = annotate_workbook(wb, stream_id, provider, use_auditor=use_auditor, audit_provider=audit_provider)
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -522,15 +547,18 @@ def verify_page():
 <html>
 <head>
   <title>Supplier Verification</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@800&display=swap" rel="stylesheet">
   <style>
+    .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem;letter-spacing:-.02em}
+    .logo span{color:#e8ff47}
     body { font-family: monospace; padding: 2rem; background: #111; color: #eee; }
     h2 span { color: #e8ff47; }
-    input[type=file] { margin: 1rem 0; display: block; color: #eee; }
     button { background: #333; color: #eee; border: 1px solid #555; padding: .5rem 1.5rem; cursor: pointer; font-family: monospace; }
     button:hover { background: #444; }
+    button:disabled { opacity: .4; cursor: not-allowed; }
     #stopBtn { background: #5c1a1a; border-color: #a33; display: none; margin-left: .5rem; }
     #stopBtn:hover { background: #7a2020; }
-    #stopBtn:disabled { opacity: .5; cursor: not-allowed; }
+    #stopBtn:disabled { opacity: .5; }
     #log-container { height: 400px; overflow-y: auto; background: #1a1a1a; border: 1px solid #333; padding: .75rem; margin-top: 1.5rem; border-radius: 4px; }
     #log div { margin: 2px 0; font-size: .85rem; line-height: 1.6; }
     .done    { color: #4caf50; }
@@ -544,30 +572,61 @@ def verify_page():
     #snapshot-info { display: none; margin-top: .75rem; font-size: .82rem; color: #aaa; }
     #snapshot-info a { color: #47c8ff; text-decoration: none; }
     #snapshot-info a:hover { text-decoration: underline; }
+    #file-list { margin: .75rem 0; display: flex; flex-direction: column; gap: .35rem; min-height: 1.5rem; }
+    .file-row { display: flex; align-items: center; gap: .75rem; padding: .4rem .65rem; background: #1a1a1a; border: 1px solid #333; border-radius: 3px; }
+    .file-name { flex: 1; font-size: .83rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-size { color: #555; font-size: .75rem; flex-shrink: 0; }
+    .file-status { font-size: .72rem; min-width: 95px; text-align: right; flex-shrink: 0; color: #555; }
+    .file-status.done { color: #4caf50; }
+    .file-status.error { color: #f44336; }
+    .file-status.processing { color: #e8ff47; }
+    .remove-btn { background: none; border: none; color: #555; cursor: pointer; padding: 0 2px; font-size: .85rem; line-height: 1; flex-shrink: 0; font-family: monospace; }
+    .remove-btn:hover:not(:disabled) { color: #f44336; }
+    #addBtn { background: #1a2a1a; color: #4caf50; border: 1px dashed #2e5c2e; padding: .35rem 1rem; font-size: .82rem; font-family: monospace; cursor: pointer; }
+    #addBtn:hover:not(:disabled) { background: #213321; }
   </style>
 </head>
 <body>
+  <div class="logo" style="margin-bottom:1.5rem">
+    <img src="/static/images/nusW-tliap_transparent_bg.png" width="320" height="80" style="vertical-align:middle"> Supplier<span>Map</span>
+  </div>
   <h2>Supplier <span>Verification</span></h2>
-  <p>Upload an Excel file exported from the agentic pipeline. Each supplier row will be
-     verified via web search across 3 dimensions.</p>
+  <p style="color:#aaa;font-size:.88rem;max-width:700px;line-height:1.7;margin-bottom:1.2rem">
+    Upload one or more Excel files exported from the agentic pipeline. Files are verified
+    sequentially — each one downloads as soon as it finishes.
+  </p>
 
   <label>LLM Provider for judgement:</label><br>
-  <select id="provider">
+  <select id="provider" onchange="updateAuditorLabel()">
     <option value="gemini">Gemini (recommended — cheapest)</option>
     <option value="anthropic">Anthropic</option>
   </select>
+  <div style="margin:.6rem 0 1rem">
+    <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;color:#ccc">
+      <input type="checkbox" id="useAuditor" style="accent-color:#e8ff47;width:15px;height:15px">
+      Include Auditor Review
+      <span id="auditorLabel" style="color:#888;font-size:.78rem">(Anthropic will cross-check Stage 1 verdicts)</span>
+    </label>
+  </div>
 
-  <input type="file" id="fileInput" accept=".xlsx">
-  <button id="uploadBtn" onclick="startVerification()">Upload &amp; Verify</button>
-  <button id="stopBtn" onclick="stopVerification()">⛔ Stop</button>
+  <div id="file-list"><div style="color:#555;font-size:.82rem;padding:.3rem 0">No files added.</div></div>
+  <input type="file" id="hiddenInput" accept=".xlsx" multiple style="display:none" onchange="addFiles(this.files)">
+  <button id="addBtn" onclick="document.getElementById('hiddenInput').click()">+ Add Files</button>
+
+  <div style="margin-top:1rem">
+    <button id="uploadBtn" onclick="startVerification()">▶ Upload &amp; Verify</button>
+    <button id="stopBtn" onclick="stopVerification()">⛔ Stop</button>
+  </div>
 
   <div id="timer">⏱ Elapsed: <span id="timerVal">0.0s</span></div>
   <div id="snapshot-info">💾 If connection drops: <a id="snapshot-link" href="#" target="_blank">download partial results</a></div>
   <div id="log-container"><div id="log"></div></div>
 
   <script>
-    const log = document.getElementById('log');
+    const log         = document.getElementById('log');
     const logContainer = document.getElementById('log-container');
+    const stopBtn     = document.getElementById('stopBtn');
+
     const append = (msg, cls) => {
       const d = document.createElement('div');
       if (cls) d.className = cls;
@@ -576,125 +635,181 @@ def verify_page():
       logContainer.scrollTop = logContainer.scrollHeight;
     };
 
-    let timerInterval = null;
-    let timerStart = null;
+    let fileQueue      = [];
+    let isCancelled    = false;
     let activeStreamId = null;
+    let timerInterval  = null;
+    let timerStart     = null;
 
-    const uploadBtn = document.getElementById('uploadBtn');
-    const stopBtn   = document.getElementById('stopBtn');
-
-    function setRunning(running) {
-      uploadBtn.disabled = running;
-      stopBtn.style.display = running ? 'inline-block' : 'none';
-      stopBtn.disabled = false;
+    function updateAuditorLabel() {
+      const provider = document.getElementById('provider').value;
+      const auditor  = provider === 'gemini' ? 'Anthropic' : 'Gemini';
+      document.getElementById('auditorLabel').textContent = `(${auditor} will cross-check Stage 1 verdicts)`;
     }
 
-    async function stopVerification() {
-      if (!activeStreamId) return;
-      stopBtn.disabled = true;
-      stopBtn.textContent = '⛔ Stopping…';
-      try {
-        await fetch(`/api/verify/cancel/${activeStreamId}`, { method: 'POST' });
-      } catch (e) {
-        append('Could not reach cancel endpoint: ' + e, 'error');
+    // ── file queue management ────────────────────────────────────────────────
+    function addFiles(newFiles) {
+      for (const f of newFiles) {
+        if (!fileQueue.some(q => q.name === f.name && q.size === f.size))
+          fileQueue.push(f);
       }
+      renderFileList();
+      document.getElementById('hiddenInput').value = '';
     }
 
+    function removeFile(idx) {
+      fileQueue.splice(idx, 1);
+      renderFileList();
+    }
+
+    function renderFileList() {
+      const list = document.getElementById('file-list');
+      if (!fileQueue.length) {
+        list.innerHTML = '<div style="color:#555;font-size:.82rem;padding:.3rem 0">No files added.</div>';
+        return;
+      }
+      list.innerHTML = fileQueue.map((f, i) => `
+        <div class="file-row" id="file-row-${i}">
+          <button class="remove-btn" onclick="removeFile(${i})">✕</button>
+          <span class="file-name">${f.name}</span>
+          <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
+          <span class="file-status" id="file-status-${i}">queued</span>
+        </div>`).join('');
+    }
+
+    function setFileStatus(idx, text, cls) {
+      const el = document.getElementById('file-status-' + idx);
+      if (el) { el.textContent = text; el.className = 'file-status ' + (cls || ''); }
+    }
+
+    // ── UI state ─────────────────────────────────────────────────────────────
+    function setRunning(running) {
+      document.getElementById('uploadBtn').disabled = running;
+      document.getElementById('addBtn').disabled    = running;
+      document.querySelectorAll('.remove-btn').forEach(b => b.disabled = running);
+      stopBtn.style.display = running ? 'inline-block' : 'none';
+      stopBtn.disabled      = false;
+      stopBtn.textContent   = '⛔ Stop';
+    }
+
+    // ── timer ────────────────────────────────────────────────────────────────
     function startTimer() {
       timerStart = Date.now();
-      const disp = document.getElementById('timer');
-      const val  = document.getElementById('timerVal');
-      disp.style.display = 'block';
-      val.textContent = '0.0s';
+      document.getElementById('timer').style.display = 'block';
+      document.getElementById('timerVal').textContent = '0.0s';
       if (timerInterval) clearInterval(timerInterval);
       timerInterval = setInterval(() => {
-        val.textContent = ((Date.now() - timerStart) / 1000).toFixed(1) + 's';
+        document.getElementById('timerVal').textContent =
+          ((Date.now() - timerStart) / 1000).toFixed(1) + 's';
       }, 100);
     }
 
     function stopTimer() {
       if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
       if (!timerStart) return;
-      const elapsed = ((Date.now() - timerStart) / 1000).toFixed(1);
-      document.getElementById('timerVal').textContent = elapsed + 's ✓';
+      document.getElementById('timerVal').textContent =
+        ((Date.now() - timerStart) / 1000).toFixed(1) + 's ✓';
     }
 
-    async function startVerification() {
-      const file = document.getElementById('fileInput').files[0];
-      if (!file) { append('⚠️ Please select an Excel file first.'); return; }
+    // ── stop ─────────────────────────────────────────────────────────────────
+    async function stopVerification() {
+      isCancelled         = true;
+      stopBtn.disabled    = true;
+      stopBtn.textContent = '⛔ Stopping…';
+      if (activeStreamId) {
+        try { await fetch('/api/verify/cancel/' + activeStreamId, { method: 'POST' }); } catch(e) {}
+      }
+    }
 
-      const provider = document.getElementById('provider').value;
-      append(`Uploading ${file.name}…`);
-      setRunning(true);
+    // ── process one file (returns true on success) ────────────────────────
+    async function processFile(file, idx, provider) {
+      setFileStatus(idx, '⚙ uploading…', 'processing');
+      append('[' + file.name + '] Uploading…');
 
       const fd = new FormData();
       fd.append('file', file);
       fd.append('provider', provider);
+      fd.append('use_auditor', document.getElementById('useAuditor').checked ? 'true' : 'false');
 
       let streamId;
       try {
-        const res = await fetch('/dev/verify/run', { method: 'POST', body: fd });
+        const res  = await fetch('/dev/verify/run', { method: 'POST', body: fd });
         const data = await res.json();
-        if (data.error) { append('Error: ' + data.error, 'error'); setRunning(false); return; }
-        streamId = data.stream_id;
-        activeStreamId = streamId;
-      } catch (e) {
-        append('Upload failed: ' + e, 'error'); setRunning(false); return;
+        if (data.error) {
+          append('[' + file.name + '] Error: ' + data.error, 'error');
+          setFileStatus(idx, '✗ error', 'error');
+          return false;
+        }
+        streamId = activeStreamId = data.stream_id;
+      } catch(e) {
+        append('[' + file.name + '] Upload failed: ' + e, 'error');
+        setFileStatus(idx, '✗ error', 'error');
+        return false;
       }
 
-      append('Upload complete — starting verification…');
-      const snapshotLink = document.getElementById('snapshot-link');
-      snapshotLink.href = `/dev/verify/snapshot/${streamId}`;
+      setFileStatus(idx, '⚙ verifying…', 'processing');
+      append('[' + file.name + '] Starting verification…');
+      document.getElementById('snapshot-link').href = '/dev/verify/snapshot/' + streamId;
       document.getElementById('snapshot-info').style.display = 'block';
 
-      const evtSource = new EventSource(`/dev/verify/stream/${streamId}`);
+      return new Promise(resolve => {
+        const es = new EventSource('/dev/verify/stream/' + streamId);
+        es.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'start') {
+            append('[' + file.name + '] Processing ' + msg.total + ' row(s)…');
+          } else if (msg.type === 'progress' || msg.type === 'status') {
+            append(msg.message);
+          } else if (msg.type === 'log') {
+            append(msg.message, msg.is_error ? 'log-err' : 'log-line');
+          } else if (msg.type === 'cancelled') {
+            append('[' + file.name + '] ⛔ Stopped — downloading partial results…', 'error');
+            setFileStatus(idx, '⛔ stopped', 'error');
+            es.close(); resolve(false);
+          } else if (msg.type === 'file_ready') {
+            append('[' + file.name + '] ✓ Done — downloading ' + msg.filename, 'done');
+            setFileStatus(idx, '✓ done', 'done');
+            const a = document.createElement('a');
+            a.href = '/dev/verify/download/' + msg.file_id;
+            a.download = msg.filename;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            es.close(); resolve(true);
+          } else if (msg.type === 'error') {
+            append('[' + file.name + '] Error: ' + msg.message, 'error');
+            setFileStatus(idx, '✗ error', 'error');
+            es.close(); resolve(false);
+          } else if (msg.type === 'done') {
+            es.close(); resolve(false);
+          }
+        };
+        es.onerror = () => {
+          append('[' + file.name + '] Connection lost.', 'error');
+          setFileStatus(idx, '✗ error', 'error');
+          es.close(); resolve(false);
+        };
+      });
+    }
 
-      evtSource.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'timer_start') {
-          startTimer();
-        } else if (msg.type === 'timer_stop') {
-          stopTimer();
-        } else if (msg.type === 'start') {
-          append(`Processing ${msg.total} supplier row(s)…`);
-        } else if (msg.type === 'progress') {
-          append(msg.message);
-        } else if (msg.type === 'status') {
-          append(msg.message);
-        } else if (msg.type === 'log') {
-          append(msg.message, msg.is_error ? 'log-err' : 'log-line');
-        } else if (msg.type === 'cancelled') {
-          stopTimer();
-          append(`⛔ Stopped after ${msg.processed} row(s) — downloading partial results…`, 'error');
-          setRunning(false);
-          stopBtn.textContent = '⛔ Stop';
-        } else if (msg.type === 'file_ready') {
-          append(`✓ Done — downloading ${msg.filename}`, 'done');
-          const a = document.createElement('a');
-          a.href = `/dev/verify/download/${msg.file_id}`;
-          a.download = msg.filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setRunning(false);
-          evtSource.close();
-        } else if (msg.type === 'error') {
-          stopTimer();
-          append('Error: ' + msg.message, 'error');
-          setRunning(false);
-          evtSource.close();
-        } else if (msg.type === 'done') {
-          setRunning(false);
-          evtSource.close();
-        }
-      };
+    // ── main entry point ──────────────────────────────────────────────────
+    async function startVerification() {
+      if (!fileQueue.length) { append('⚠️ Add at least one .xlsx file first.'); return; }
+      isCancelled = false;
+      const provider = document.getElementById('provider').value;
+      log.innerHTML = '';
+      setRunning(true);
+      startTimer();
 
-      evtSource.onerror = () => {
-        stopTimer();
-        append('Connection lost.', 'error');
-        setRunning(false);
-        evtSource.close();
-      };
+      let ok = 0;
+      for (let i = 0; i < fileQueue.length; i++) {
+        if (isCancelled) { append('⛔ Queue stopped.', 'error'); break; }
+        if (await processFile(fileQueue[i], i, provider)) ok++;
+      }
+
+      stopTimer();
+      setRunning(false);
+      activeStreamId = null;
+      if (!isCancelled)
+        append('✅ All done — ' + ok + '/' + fileQueue.length + ' file(s) verified and downloaded.', 'done');
     }
   </script>
 </body>
@@ -745,17 +860,19 @@ def verify_run():
     if not f.filename.endswith(".xlsx"):
         return jsonify({"error": "Only .xlsx files are supported"}), 400
 
-    provider = request.form.get("provider", "gemini")
-    file_bytes = f.read()
-    filename = f.filename
-    stream_id = uuid.uuid4().hex
+    provider    = request.form.get("provider", "gemini")
+    use_auditor = request.form.get("use_auditor", "false") == "true"
+    audit_provider = "anthropic" if provider == "gemini" else "gemini"
+    file_bytes  = f.read()
+    filename    = f.filename
+    stream_id   = uuid.uuid4().hex
 
     with _verify_queues_lock:
         _verify_queues[stream_id] = []
 
     thread = threading.Thread(
         target=_run_verification,
-        args=(stream_id, file_bytes, filename, provider),
+        args=(stream_id, file_bytes, filename, provider, use_auditor, audit_provider),
         daemon=True,
     )
     thread.start()

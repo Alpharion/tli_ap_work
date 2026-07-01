@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, wait as futures_wait, ALL_COM
 
 from ai import call_ai, safe_parse_json, get_evidence, _source_url_cache
 from coords import get_coords
-from scraper import web_search, DDGRateLimitError
+from scraper import serper_web_search as web_search, DDGRateLimitError
 
 
 # ── Deduplication helpers (used by run_agentic_pipeline) ──────────────────────

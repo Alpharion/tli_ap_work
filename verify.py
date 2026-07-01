@@ -24,7 +24,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from ai import call_ai, safe_parse_json
 from audit import ai_audit_row, write_audit_headers, write_audit_row, AUDIT_COL_COUNT
-from scraper import web_search
+from scraper import web_search, serper_web_search
 
 # ── _export_files is imported from app at call-time to avoid circular imports ─
 
@@ -162,18 +162,21 @@ def verify_supplier_row(
     log_fn=None,
     use_auditor: bool = False,
     audit_provider: str = "",
+    search_backend: str = "ddg",
 ) -> dict:
     """
     Run three web searches, combine evidence, call Stage 1 LLM.
     If use_auditor=True, call _ai_audit_row() with the same evidence for Stage 2.
+    search_backend: "ddg" (default) or "serper"
     """
     _log = _make_logger(log_fn)
     component_query = components[:120] if components else "components"
+    _search = serper_web_search if search_backend == "serper" else web_search
 
-    # ── 3 broad searches via DDG + Crawl4AI ──────────────────────────────────
-    r1 = web_search(f'"{company_name}" supplier manufacturer', n=10, max_scrape=4, log_fn=log_fn)
-    r2 = web_search(f'"{company_name}" "{supplies_to}" supply partnership', n=10, max_scrape=4, log_fn=log_fn)
-    r3 = web_search(f'"{company_name}" "{component_query}" manufacture supply', n=10, max_scrape=4, log_fn=log_fn)
+    # ── 3 broad searches + Crawl4AI ───────────────────────────────────────────
+    r1 = _search(f'"{company_name}" supplier manufacturer', n=10, max_scrape=4, log_fn=log_fn)
+    r2 = _search(f'"{company_name}" "{supplies_to}" supply partnership', n=10, max_scrape=4, log_fn=log_fn)
+    r3 = _search(f'"{company_name}" "{component_query}" manufacture supply', n=10, max_scrape=4, log_fn=log_fn)
     all_results = r1 + r2 + r3
 
     evidence = _build_evidence(all_results)
@@ -281,7 +284,8 @@ def _finalise_sheet(ws):
 
 
 def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str,
-                      use_auditor: bool = False, audit_provider: str = "") -> openpyxl.Workbook:
+                      use_auditor: bool = False, audit_provider: str = "",
+                      search_backend: str = "ddg") -> openpyxl.Workbook:
     """
     Iterate every tier sheet in the workbook, run verification per supplier row,
     and append the 5 verification columns. Pushes SSE progress events to the queue.
@@ -390,7 +394,7 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str,
             futures = {
                 executor.submit(
                     verify_supplier_row, company, supplies_to, components, provider, log_fn,
-                    use_auditor, audit_provider
+                    use_auditor, audit_provider, search_backend
                 ): row_idx
                 for row_idx, company, supplies_to, components in rows_to_process
             }
@@ -481,7 +485,8 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str,
 # ── Background worker ─────────────────────────────────────────────────────────
 
 def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider: str,
-                      use_auditor: bool = False, audit_provider: str = ""):
+                      use_auditor: bool = False, audit_provider: str = "",
+                      search_backend: str = "ddg"):
     """Background thread: load workbook, annotate, save, signal file_ready."""
     from app import _export_files, _export_files_lock
 
@@ -502,7 +507,8 @@ def _run_verification(stream_id: str, file_bytes: bytes, filename: str, provider
             _snapshot_store[stream_id] = snap_path
 
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-        wb = annotate_workbook(wb, stream_id, provider, use_auditor=use_auditor, audit_provider=audit_provider)
+        wb = annotate_workbook(wb, stream_id, provider, use_auditor=use_auditor,
+                               audit_provider=audit_provider, search_backend=search_backend)
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -601,11 +607,22 @@ def verify_page():
     <option value="gemini">Gemini (recommended — cheapest)</option>
     <option value="anthropic">Anthropic</option>
   </select>
-  <div style="margin:.6rem 0 1rem">
+  <div style="margin:.6rem 0 .5rem">
     <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;color:#ccc">
       <input type="checkbox" id="useAuditor" style="accent-color:#e8ff47;width:15px;height:15px">
       Include Auditor Review
       <span id="auditorLabel" style="color:#888;font-size:.78rem">(Anthropic will cross-check Stage 1 verdicts)</span>
+    </label>
+  </div>
+  <div style="margin:.3rem 0 1rem;display:flex;align-items:center;gap:.75rem">
+    <span style="color:#ccc;font-size:.88rem">Search backend:</span>
+    <label style="display:flex;align-items:center;gap:.35rem;cursor:pointer;color:#ccc;font-size:.88rem">
+      <input type="radio" name="searchBackend" id="backendDDG" value="ddg" checked style="accent-color:#e8ff47">
+      DuckDuckGo
+    </label>
+    <label style="display:flex;align-items:center;gap:.35rem;cursor:pointer;color:#ccc;font-size:.88rem">
+      <input type="radio" name="searchBackend" id="backendSerper" value="serper" style="accent-color:#e8ff47">
+      Serper (Google)
     </label>
   </div>
 
@@ -730,6 +747,7 @@ def verify_page():
       fd.append('file', file);
       fd.append('provider', provider);
       fd.append('use_auditor', document.getElementById('useAuditor').checked ? 'true' : 'false');
+      fd.append('search_backend', document.querySelector('input[name="searchBackend"]:checked').value);
 
       let streamId;
       try {
@@ -860,19 +878,20 @@ def verify_run():
     if not f.filename.endswith(".xlsx"):
         return jsonify({"error": "Only .xlsx files are supported"}), 400
 
-    provider    = request.form.get("provider", "gemini")
-    use_auditor = request.form.get("use_auditor", "false") == "true"
-    audit_provider = "anthropic" if provider == "gemini" else "gemini"
-    file_bytes  = f.read()
-    filename    = f.filename
-    stream_id   = uuid.uuid4().hex
+    provider        = request.form.get("provider", "gemini")
+    use_auditor     = request.form.get("use_auditor", "false") == "true"
+    search_backend  = request.form.get("search_backend", "ddg")
+    audit_provider  = "anthropic" if provider == "gemini" else "gemini"
+    file_bytes      = f.read()
+    filename        = f.filename
+    stream_id       = uuid.uuid4().hex
 
     with _verify_queues_lock:
         _verify_queues[stream_id] = []
 
     thread = threading.Thread(
         target=_run_verification,
-        args=(stream_id, file_bytes, filename, provider, use_auditor, audit_provider),
+        args=(stream_id, file_bytes, filename, provider, use_auditor, audit_provider, search_backend),
         daemon=True,
     )
     thread.start()

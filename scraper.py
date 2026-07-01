@@ -138,7 +138,7 @@ async def _crawl_async(urls: list[str], max_scrape: int, log_fn) -> list[dict]:
                 _log(f"[crawl] Skipping junk domain: {url}")
                 continue
             try:
-                result = await asyncio.wait_for(crawler.arun(url=url), timeout=20)
+                result = await asyncio.wait_for(crawler.arun(url=url), timeout=10)
                 if result.success and result.markdown:
                     content = " ".join(result.markdown.split())[:2000]
                     results.append({"url": url, "content": content})

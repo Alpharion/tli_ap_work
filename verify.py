@@ -66,15 +66,21 @@ def _call_ai_json(prompt: str, provider: str, max_tokens: int,
     return None
 
 
-def _unique_urls(urls: list[str]) -> list[str]:
-    """Deduplicate a flat list of URL strings while preserving order."""
+def _unique_urls(results: list[dict]) -> list[dict]:
+    """Deduplicate scraped results by URL while preserving order and timestamps."""
     seen: set[str] = set()
-    result = []
-    for url in urls:
-        if url not in seen:
+    out = []
+    for r in results:
+        url = r.get("url", "")
+        if url and url not in seen:
             seen.add(url)
-            result.append(url)
-    return result
+            out.append({"url": url, "timestamp": r.get("timestamp", "unknown")})
+    return out
+
+
+def _format_urls(url_entries: list[dict]) -> str:
+    """Format url+timestamp pairs as 'url (timestamp), url (timestamp), ...'"""
+    return ", ".join(f"{e['url']} ({e['timestamp']})" for e in url_entries)
 
 
 # Per-run queues: stream_id -> list of SSE event dicts
@@ -183,7 +189,7 @@ def verify_supplier_row(
     _log(f"[llm] Combined evidence: {len(all_results)} page(s) scraped across 3 queries")
     verdict = _ai_judge_all(evidence, company_name, supplies_to, component_query, provider, log_fn=log_fn)
 
-    unique_urls = _unique_urls([r["url"] for r in all_results])
+    unique_urls = _unique_urls(all_results)
 
     notes_parts = []
     if verdict["notes_exists"]:
@@ -204,7 +210,7 @@ def verify_supplier_row(
         "label_exists":      "Web Evidence" if verdict["source_exists"]    == "web_evidence" else "Training Data",
         "label_supply":      "Web Evidence" if verdict["source_supply"]    == "web_evidence" else "Training Data",
         "label_component":   "Web Evidence" if verdict["source_component"] == "web_evidence" else "Training Data",
-        "urls":              unique_urls,
+        "urls":              unique_urls,   # list[{"url": str, "timestamp": str}]
         # audit fields — populated below if use_auditor, otherwise empty
         "audit_company_exists":    "",
         "audit_supply_ties":       "",
@@ -433,8 +439,8 @@ def annotate_workbook(wb: openpyxl.Workbook, stream_id: str, provider: str,
                     c.alignment = _WRAP
                     c.fill = _YES_FILL if result["correct_component"] == "Yes" else _NO_FILL
                 if col_urls:
-                    c = ws.cell(row=row_idx, column=col_urls, value=", ".join(result["urls"]))
-                    c.alignment = Alignment(wrap_text=False, vertical="top")
+                    c = ws.cell(row=row_idx, column=col_urls, value=_format_urls(result["urls"]))
+                    c.alignment = Alignment(wrap_text=True, vertical="top")
 
                 # Write 6 source-tracking columns: label + notes pairs
                 for j, (notes_key, label_key) in enumerate([

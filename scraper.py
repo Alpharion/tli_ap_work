@@ -125,6 +125,42 @@ def serper_search(query: str, n: int = 10, log_fn=None) -> list[str]:
 
 # ── Content extraction ────────────────────────────────────────────────────────
 
+def _extract_date(result) -> str:
+    """
+    Try to pull a publish date from a crawl4ai CrawlResult.
+    Checks result.metadata first, then scans the markdown for ISO/long-form dates.
+    Returns a date string like '2024-03-15' or 'unknown'.
+    """
+    import re as _re
+
+    # crawl4ai may populate result.metadata with a published_date or date key
+    meta = getattr(result, "metadata", None) or {}
+    for key in ("published_date", "date", "publish_date", "datePublished", "article:published_time"):
+        val = meta.get(key)
+        if val:
+            # Trim to date portion if it's a full ISO datetime
+            return str(val)[:10]
+
+    # Fallback: scan the first 3000 chars of markdown for a date pattern
+    text = (result.markdown or "")[:3000]
+
+    # ISO: 2024-03-15
+    m = _re.search(r'\b(20\d{2}[-/]\d{2}[-/]\d{2})\b', text)
+    if m:
+        return m.group(1).replace("/", "-")
+
+    # Long-form: March 15, 2024 / 15 March 2024
+    months = r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+    m = _re.search(rf'\b({months}\s+\d{{1,2}},?\s+20\d{{2}})\b', text, _re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = _re.search(rf'\b(\d{{1,2}}\s+{months}\s+20\d{{2}})\b', text, _re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    return "unknown"
+
+
 async def _crawl_async(urls: list[str], max_scrape: int, log_fn) -> list[dict]:
     """Crawl up to max_scrape non-junk URLs and return evidence dicts."""
     from crawl4ai import AsyncWebCrawler
@@ -141,8 +177,9 @@ async def _crawl_async(urls: list[str], max_scrape: int, log_fn) -> list[dict]:
                 result = await asyncio.wait_for(crawler.arun(url=url), timeout=10)
                 if result.success and result.markdown:
                     content = " ".join(result.markdown.split())[:2000]
-                    results.append({"url": url, "content": content})
-                    _log(f"[crawl] Scraped: {url}")
+                    timestamp = _extract_date(result)
+                    results.append({"url": url, "content": content, "timestamp": timestamp})
+                    _log(f"[crawl] Scraped: {url} (date: {timestamp})")
                 else:
                     _log(f"[crawl] No content from: {url}")
             except asyncio.TimeoutError:

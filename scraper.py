@@ -128,35 +128,45 @@ def serper_search(query: str, n: int = 10, log_fn=None) -> list[str]:
 def _extract_date(result) -> str:
     """
     Try to pull a publish date from a crawl4ai CrawlResult.
-    Checks result.metadata first, then scans the markdown for ISO/long-form dates.
+    1. Checks result.metadata for known date keys.
+    2. Looks for a date near publish-date keywords (Published, Posted, Date, Updated, By ... on).
+    3. Falls back to the first ISO/long-form date found in the first 3000 chars.
     Returns a date string like '2024-03-15' or 'unknown'.
+    No LLM calls — pure regex.
     """
     import re as _re
 
-    # crawl4ai may populate result.metadata with a published_date or date key
+    _MONTHS = r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+    _ISO    = r'20\d{2}[-/]\d{2}[-/]\d{2}'
+    _LONG1  = rf'{_MONTHS}\s+\d{{1,2}},?\s+20\d{{2}}'   # March 15, 2024
+    _LONG2  = rf'\d{{1,2}}\s+{_MONTHS}\s+20\d{{2}}'      # 15 March 2024
+    _DATE   = rf'(?:{_ISO}|{_LONG1}|{_LONG2})'
+
+    def _normalise(raw: str) -> str:
+        # Trim ISO datetime to date portion only
+        m = _re.match(r'(20\d{2}[-/]\d{2}[-/]\d{2})', raw)
+        return m.group(1).replace("/", "-") if m else raw.strip()
+
+    # ── Step 1: metadata ──────────────────────────────────────────────────────
     meta = getattr(result, "metadata", None) or {}
     for key in ("published_date", "date", "publish_date", "datePublished", "article:published_time"):
         val = meta.get(key)
         if val:
-            # Trim to date portion if it's a full ISO datetime
-            return str(val)[:10]
+            return _normalise(str(val))
 
-    # Fallback: scan the first 3000 chars of markdown for a date pattern
     text = (result.markdown or "")[:3000]
 
-    # ISO: 2024-03-15
-    m = _re.search(r'\b(20\d{2}[-/]\d{2}[-/]\d{2})\b', text)
+    # ── Step 2: date near a publish-date keyword ──────────────────────────────
+    # Matches patterns like "Published: March 15, 2024" or "Posted on 2024-03-15"
+    _KW = r'(?:published|posted|date|updated|written|by\b[^|\n]{0,40}?\bon)\W{0,5}'
+    m = _re.search(rf'{_KW}({_DATE})', text, _re.IGNORECASE)
     if m:
-        return m.group(1).replace("/", "-")
+        return _normalise(m.group(1))
 
-    # Long-form: March 15, 2024 / 15 March 2024
-    months = r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
-    m = _re.search(rf'\b({months}\s+\d{{1,2}},?\s+20\d{{2}})\b', text, _re.IGNORECASE)
+    # ── Step 3: first date anywhere in the opening text ──────────────────────
+    m = _re.search(rf'({_DATE})', text, _re.IGNORECASE)
     if m:
-        return m.group(1)
-    m = _re.search(rf'\b(\d{{1,2}}\s+{months}\s+20\d{{2}})\b', text, _re.IGNORECASE)
-    if m:
-        return m.group(1)
+        return _normalise(m.group(1))
 
     return "unknown"
 

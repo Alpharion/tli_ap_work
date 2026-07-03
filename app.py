@@ -20,12 +20,14 @@ from flask_cors import CORS
 from ai import available_providers
 from excel_export import build_bulk_workbook
 from pipeline import run_pipeline, run_agentic_pipeline
+from audit import audit_bp
 from insights import insights_bp
 from report_export import report_bp
 from verify import verify_bp
 
 app = Flask(__name__)
 CORS(app)
+app.register_blueprint(audit_bp)
 app.register_blueprint(verify_bp)
 app.register_blueprint(report_bp)
 app.register_blueprint(insights_bp)

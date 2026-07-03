@@ -702,33 +702,97 @@ Return ONLY valid JSON (no markdown, no code fences) with these exact keys:
   "needs_research": "2 paragraphs: summarise the entries that require further research (Company Exists + Supply Ties confirmed but component unverified). Name specific companies if present. Recommend concrete next steps — targeted web searches, direct outreach, or procurement team verification. Write empty string if the list is empty."
 }}"""
 
-    # Append pharma regulatory section to prompt if regulatory data exists
+    # Collect pharma regulatory rows (used by third call below)
     all_reg_rows = []
     if regulatory_by_file:
         for rows in regulatory_by_file.values():
             all_reg_rows.extend(rows)
 
-    if all_reg_rows:
-        reg_json = json.dumps(all_reg_rows, indent=2)
-        prompt = prompt.rstrip("}")  # remove closing brace
-        prompt += (
-            ',\n  "regulatory_analysis": "2-3 paragraphs: analyse the regulatory approval landscape for the OEM manufacturers in this pharmaceutical supply chain. '
-            'Which regulatory bodies are represented (e.g. FDA, EMA, PMDA)? Which OEMs are fully approved vs pending vs not found? '
-            'What does the approval pattern imply for market access, compliance risk, and supply chain resilience? '
-            'Cite specific OEM names, regulatory bodies, and status values from the data."\n}}'
-        )
-        prompt += f"\n\nPHARMA REGULATORY DATA:\n{reg_json[:3000]}"
+    metrics_json = json.dumps(metrics, indent=2)
 
-    raw = call_ai(prompt, "anthropic", max_tokens=4500)
-    parsed = safe_parse_json(raw)
-    if not isinstance(parsed, dict) or "executive_summary" not in parsed:
-        return {
-            "executive_summary": raw,
-            "geo_concentration": "", "key_components": "", "hub_companies": "",
-            "bottlenecks": "", "circular_relationships": "", "cross_product": "",
-            "needs_research": "", "regulatory_analysis": "",
-        }
-    return parsed
+    prompt_a = f"""You are a senior supply chain intelligence analyst writing a formal briefing document.
+Below is a structured JSON object containing quantitative metrics from one or more verified supplier datasets.
+Write substantive, detailed analytical prose for each section.
+
+Rules:
+- Every claim MUST cite a specific number, percentage, or company name from the metrics JSON.
+- Each section should be 2-3 full paragraphs of analytical prose separated by \\n\\n.
+- Do not use bullet points or headers inside the text values.
+
+METRICS:
+{metrics_json}
+
+Return ONLY valid JSON (no markdown, no code fences) with these exact keys:
+{{
+  "executive_summary": "2-3 paragraphs: overall picture — total verified vs inferred suppliers, products analysed, dominant geography, most critical component category, and the single most important risk finding. Name specific companies and countries.",
+  "geo_concentration": "2-3 paragraphs: which countries dominate and by what percentage? Geopolitical risk implications (sanctions, trade restrictions). Cite top 3-5 countries by name and count. What would a disruption in the top country mean?",
+  "key_components": "2-3 paragraphs: which components appear most frequently? Are there components supplied by very few companies? Cite top components by name and frequency. Discuss substitutability and criticality.",
+  "hub_companies": "2-3 paragraphs: identify the most connected suppliers by out-degree. Name top hub companies and their customer counts. Explain cascade risk. Note which relationships are inferred vs verified."
+}}"""
+
+    prompt_b = f"""You are a senior supply chain intelligence analyst writing a formal briefing document.
+Below is a structured JSON object containing quantitative metrics from one or more verified supplier datasets.
+Write substantive, detailed analytical prose for each section.
+
+Rules:
+- Every claim MUST cite a specific number, percentage, or company name from the metrics JSON.
+- Each section should be 2-3 full paragraphs of analytical prose separated by \\n\\n.
+- Do not use bullet points or headers inside the text values.
+
+METRICS:
+{metrics_json}
+
+Return ONLY valid JSON (no markdown, no code fences) with these exact keys:
+{{
+  "bottlenecks": "2-3 paragraphs: analyse betweenness centrality results. Name top bottleneck companies and their scores. Explain in plain terms what betweenness centrality means. Recommend mitigation strategies.",
+  "circular_relationships": "2-3 paragraphs: analyse any circular supply relationships detected. Name specific pairs. Explain why circularity is anomalous and the risks it creates. Write empty string if none detected.",
+  "cross_product": "2-3 paragraphs: suppliers shared across multiple products — name specific companies and products. Explain the dual risk of shared suppliers (efficiency vs correlated failure). Write empty string if only 1 product analysed.",
+  "needs_research": "2 paragraphs: summarise entries requiring further research. Name specific companies. Recommend concrete next steps. Write empty string if none."
+}}"""
+
+    _status(stream_id, "🤖 Generating narrative part 1/2…")
+    raw_a  = call_ai(prompt_a, "anthropic", max_tokens=6000)
+    part_a = safe_parse_json(raw_a)
+
+    _status(stream_id, "🤖 Generating narrative part 2/2…")
+    raw_b  = call_ai(prompt_b, "anthropic", max_tokens=6000)
+    part_b = safe_parse_json(raw_b)
+
+    # Merge — fall back to empty string for any section that failed to parse
+    _EMPTY = {"executive_summary": "", "geo_concentration": "", "key_components": "",
+              "hub_companies": "", "bottlenecks": "", "circular_relationships": "",
+              "cross_product": "", "needs_research": "", "regulatory_analysis": ""}
+
+    result = {**_EMPTY}
+    if isinstance(part_a, dict):
+        result.update({k: v for k, v in part_a.items() if k in _EMPTY})
+    if isinstance(part_b, dict):
+        result.update({k: v for k, v in part_b.items() if k in _EMPTY})
+
+    # If part_a failed entirely, surface the raw text in executive_summary so nothing is silently lost
+    if not isinstance(part_a, dict) or "executive_summary" not in part_a:
+        result["executive_summary"] = raw_a if not isinstance(part_a, dict) else result["executive_summary"]
+
+    # Pharma regulatory section — third call if needed
+    if all_reg_rows:
+        _status(stream_id, "🤖 Generating regulatory narrative…")
+        reg_json_str = json.dumps(all_reg_rows, indent=2)
+        prompt_reg = f"""You are a senior supply chain intelligence analyst.
+Analyse the regulatory approval landscape for the OEM manufacturers in this pharmaceutical supply chain.
+
+REGULATORY DATA:
+{reg_json_str[:3000]}
+
+Return ONLY valid JSON (no markdown):
+{{
+  "regulatory_analysis": "2-3 paragraphs: which regulatory bodies are represented (FDA, EMA, PMDA, etc.)? Which OEMs are fully approved vs pending vs not found? What does the approval pattern imply for market access, compliance risk, and supply chain resilience? Cite specific OEM names, regulatory bodies, and status values."
+}}"""
+        raw_reg  = call_ai(prompt_reg, "anthropic", max_tokens=2000)
+        part_reg = safe_parse_json(raw_reg)
+        if isinstance(part_reg, dict) and "regulatory_analysis" in part_reg:
+            result["regulatory_analysis"] = part_reg["regulatory_analysis"]
+
+    return result
 
 
 # ── DOCX builder ──────────────────────────────────────────────────────────────
@@ -774,6 +838,15 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
             _ct(cells[-1], "Model inference")
             _set_bg(cells[-1], "FFFDE7")
 
+    def _add_narrative(text: str):
+        """Split on double-newlines and add each chunk as a separate DOCX paragraph."""
+        if not text:
+            return
+        for chunk in str(text).split("\n\n"):
+            chunk = chunk.strip()
+            if chunk:
+                doc.add_paragraph(chunk)
+
     # Pass closures to per-product section renderer
     _docx_helpers = {"_ct": _ct, "_hdr_row": _hdr_row, "_flag_row": _flag_row, "_set_bg": _set_bg}
 
@@ -802,11 +875,11 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
 
     # ── Executive Summary ────────────────────────────────────────────────────
     doc.add_heading("1. Executive Summary", level=1)
-    doc.add_paragraph(narrative.get("executive_summary", ""))
+    _add_narrative(narrative.get("executive_summary", ""))
 
     # ── Geographical Concentration ───────────────────────────────────────────
     doc.add_heading("2. Geographical Concentration", level=1)
-    doc.add_paragraph(narrative.get("geo_concentration", ""))
+    _add_narrative(narrative.get("geo_concentration", ""))
 
     if metrics["country_concentration"]:
         top = metrics["country_concentration"][:10]
@@ -838,7 +911,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
 
     # ── Key Components ───────────────────────────────────────────────────────
     doc.add_heading("3. Key Components", level=1)
-    doc.add_paragraph(narrative.get("key_components", ""))
+    _add_narrative(narrative.get("key_components", ""))
     tbl = doc.add_table(rows=1, cols=2)
     tbl.style = "Table Grid"
     _hdr_row(tbl, ["Component", "Frequency"], "1B5E20")
@@ -851,7 +924,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
 
     # ── Hub Companies ────────────────────────────────────────────────────────
     doc.add_heading("4. Hub Companies", level=1)
-    doc.add_paragraph(narrative.get("hub_companies", ""))
+    _add_narrative(narrative.get("hub_companies", ""))
     tbl = doc.add_table(rows=1, cols=3)
     tbl.style = "Table Grid"
     _hdr_row(tbl, ["Company", "Customers Supplied", "Note"], "1565C0")
@@ -863,7 +936,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
 
     # ── Bottlenecks ──────────────────────────────────────────────────────────
     doc.add_heading("5. Potential Bottlenecks", level=1)
-    doc.add_paragraph(narrative.get("bottlenecks", ""))
+    _add_narrative(narrative.get("bottlenecks", ""))
     tbl = doc.add_table(rows=1, cols=3)
     tbl.style = "Table Grid"
     _hdr_row(tbl, ["Company", "Centrality Score", "Note"], "6A1B9A")
@@ -884,7 +957,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
         doc.add_heading(f"{next_sec}. Regulatory Landscape", level=1)
         reg_narrative = narrative.get("regulatory_analysis", "")
         if reg_narrative:
-            doc.add_paragraph(reg_narrative)
+            _add_narrative(reg_narrative)
 
         tbl = doc.add_table(rows=1, cols=5)
         tbl.style = "Table Grid"
@@ -913,7 +986,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
         doc.add_heading(f"{next_sec}. Circular Supply Relationships", level=1)
         narr_circ = narrative.get("circular_relationships", "")
         if narr_circ:
-            doc.add_paragraph(narr_circ)
+            _add_narrative(narr_circ)
         doc.add_paragraph(
             "The following company pairs have a mutual supply relationship "
             "(A supplies B and B supplies A). These warrant further investigation."
@@ -939,7 +1012,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
     # ── Cross-product overlap ────────────────────────────────────────────────
     if metrics["cross_product_suppliers"]:
         doc.add_heading(f"{next_sec}. Cross-Product Supplier Overlap", level=1)
-        doc.add_paragraph(narrative.get("cross_product", ""))
+        _add_narrative(narrative.get("cross_product", ""))
         tbl = doc.add_table(rows=1, cols=3)
         tbl.style = "Table Grid"
         _hdr_row(tbl, ["Company", "Files / Products", "Note"], "E65100")
@@ -984,7 +1057,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
         doc.add_heading(f"{next_sec}. Requires Further Research", level=1)
         narr = narrative.get("needs_research", "")
         if narr:
-            doc.add_paragraph(narr)
+            _add_narrative(narr)
         doc.add_paragraph(
             "The following entries have a confirmed company existence and supply tie, "
             "but the component supplied could not be verified. Follow-up investigation is recommended."

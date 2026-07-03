@@ -347,8 +347,15 @@ def _group_by_source(analysis_rows):
 
 
 def _most_important_oem(rows):
-    """Return the supplies_to value with the highest in-degree across these rows."""
-    counter = Counter(r["supplies_to"] for r in rows if r.get("supplies_to"))
+    """Return the OEM: the most common supplies_to among Tier 1 rows.
+
+    Using only Tier 1 rows avoids misidentifying a busy Tier 1 company as the OEM
+    when there are many more Tier 2 rows than Tier 1 rows.
+    Falls back to global in-degree if no tier information is present.
+    """
+    tier1_rows = [r for r in rows if r.get("tier") == 1]
+    source = tier1_rows if tier1_rows else rows
+    counter = Counter(r["supplies_to"] for r in source if r.get("supplies_to"))
     return counter.most_common(1)[0][0] if counter else None
 
 

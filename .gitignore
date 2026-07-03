@@ -7,3 +7,8 @@ test.txt
 env/
 
 .venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo

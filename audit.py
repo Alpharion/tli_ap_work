@@ -10,6 +10,7 @@ Also exposes `audit_bp` — a Flask Blueprint serving the standalone /dev/audit 
 """
 
 import io
+import re
 import tempfile
 import threading
 import time
@@ -20,6 +21,7 @@ from flask import Blueprint, Response, jsonify, request
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from ai import call_ai, safe_parse_json
+from scraper import crawl_urls
 
 audit_bp = Blueprint("audit", __name__)
 
@@ -283,6 +285,19 @@ def _find_col(ws, header: str) -> int | None:
     return None
 
 
+def _parse_urls(raw_urls: str) -> list[str]:
+    """Split URL column value and strip date suffixes like ' (2024-01-15)'."""
+    urls = []
+    for entry in str(raw_urls or "").split(", "):
+        entry = entry.strip()
+        if not entry:
+            continue
+        clean = entry.rsplit(" (", 1)[0].strip() if " (" in entry else entry
+        if clean.startswith("http"):
+            urls.append(clean)
+    return urls
+
+
 def _parse_note(verification_notes: str, tag: str) -> str:
     """Extract per-check note from '[Exists] ... | [Supply] ... | [Component] ...' string."""
     for part in str(verification_notes or "").split(" | "):
@@ -337,6 +352,7 @@ def _run_audit_standalone(stream_id: str, file_bytes: bytes, filename: str, prov
             col_supply    = _find_col(ws, "Supply Ties Exist")
             col_correct   = _find_col(ws, "Correct Component Supplied")
             col_notes     = _find_col(ws, "Verification Notes")
+            col_urls      = _find_col(ws, "URLs") or _find_col(ws, "URL")
 
             if not col_company:
                 push({"type": "status", "message": f"⚠️ Skipping '{ws.title}' — no Company Name column"})
@@ -349,29 +365,25 @@ def _run_audit_standalone(stream_id: str, file_bytes: bytes, filename: str, prov
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
             def audit_row(row_idx, company, supplies_to, components, exists_val,
-                          supply_val, correct_val, notes_val):
-                # Build evidence from Stage 1's documented reasoning — no web crawl
-                notes_exists    = _parse_note(notes_val, "Exists")
-                notes_supply    = _parse_note(notes_val, "Supply")
-                notes_component = _parse_note(notes_val, "Component")
-                evidence = (
-                    f"Company Exists — Stage 1 said: {notes_exists or '(no notes)'}\n"
-                    f"Supply Ties — Stage 1 said: {notes_supply or '(no notes)'}\n"
-                    f"Correct Component — Stage 1 said: {notes_component or '(no notes)'}"
-                )
+                          supply_val, correct_val, notes_val, urls_val):
+                # Re-crawl URLs from the verified Excel to rebuild evidence
+                urls    = _parse_urls(urls_val)
+                crawled = crawl_urls(urls[:4], log_fn=log_fn) if urls else []
+                evidence = "\n\n".join(
+                    f"[{r['url']}]\n{r['content']}" for r in crawled
+                ) if crawled else ""
 
                 stage1 = {
                     "company_exists":    exists_val == "Yes",
                     "supply_ties":       supply_val == "Yes",
                     "correct_component": correct_val == "Yes",
-                    "notes_exists":      notes_exists,
-                    "notes_supply":      notes_supply,
-                    "notes_component":   notes_component,
+                    "notes_exists":      _parse_note(notes_val, "Exists"),
+                    "notes_supply":      _parse_note(notes_val, "Supply"),
+                    "notes_component":   _parse_note(notes_val, "Component"),
                 }
 
                 return row_idx, ai_audit_row(
-                    evidence, company, supplies_to, components, stage1, provider,
-                    log_fn=log_fn, mode="reasoning"
+                    evidence, company, supplies_to, components, stage1, provider, log_fn=log_fn
                 )
 
             rows_data = []
@@ -390,6 +402,7 @@ def _run_audit_standalone(stream_id: str, file_bytes: bytes, filename: str, prov
                     _get(col_supply),
                     _get(col_correct),
                     _get(col_notes),
+                    _get(col_urls),
                 ))
 
             with ThreadPoolExecutor(max_workers=3) as executor:
@@ -495,10 +508,9 @@ def audit_page():
   </div>
   <h2>Supplier <span>Audit</span></h2>
   <p style="color:#aaa;font-size:.88rem;max-width:700px;line-height:1.7;margin-bottom:1.2rem">
-    Upload verified Excel files from the verification pipeline. The auditor reads Stage 1's
-    documented reasoning and uses its own training knowledge to challenge whether the conclusions
-    are sound — <strong>no web crawling required</strong>. It looks for weak inferences,
-    unjustified leaps, and claims that contradict known facts about the company or industry.
+    Upload verified Excel files from the verification pipeline. The auditor re-crawls the
+    source URLs already in the file to rebuild the original evidence, then adversarially
+    challenges Stage 1's verdicts — looking for weak inferences, gaps, or overreach.
     Upload files <strong>without</strong> existing audit columns.
   </p>
 

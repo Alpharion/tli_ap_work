@@ -37,6 +37,8 @@ _insights_queues      = {}
 _insights_queues_lock = threading.Lock()
 _insights_store       = {}
 _insights_store_lock  = threading.Lock()
+_insights_file_store  = {}   # key → {"path": str, "filename": str} for per-file docs
+_insights_file_lock   = threading.Lock()
 
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -64,11 +66,13 @@ _COL_ALIASES = {
     "supply_ties":       ["supply ties exist", "supply ties"],
     "correct_component": ["correct component supplied", "correct component"],
     "product":           ["product"],
+    "url":               ["url", "urls"],
 }
 
 _OEM_COL_ALIASES = {
     "company_name":      ["company name", "company"],
     "product":           ["product"],
+    "country":           ["country"],
     "regulatory_body":   ["regulatory body"],
     "region":            ["region"],
     "status":            ["status"],
@@ -95,21 +99,66 @@ def _detect_cols(ws, aliases=None):
 
 # ── Data ingestion ────────────────────────────────────────────────────────────
 
+_PRODUCT_OVERVIEW_LABELS = {
+    "category", "industry", "oem manufacturer", "oem country",
+    "key components", "description",
+}
+
+def _read_product_sheet(ws):
+    """Read product name, overview fields, and AI summary from a product detail sheet."""
+    info = {
+        "name": "", "category": "", "industry": "",
+        "oem_manufacturer": "", "oem_country": "",
+        "key_components": "", "description": "", "ai_summary": "",
+    }
+    if ws is None:
+        return info
+
+    # Row 1 col A = product name (merged cell)
+    name_val = ws.cell(1, 1).value
+    info["name"] = str(name_val).strip() if name_val else ""
+
+    # Rows 3–8: label (col A) → value (col B)
+    capture_next_as_summary = False
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        label_raw = str(row[0]).strip() if row[0] else ""
+        value_raw = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+
+        if capture_next_as_summary:
+            # First non-empty merged cell after "Provider:" heading is the AI summary
+            # The summary spans col A (col B is blank in a merged cell)
+            summary_text = str(row[0]).strip() if row[0] else ""
+            if summary_text and not summary_text.startswith("Provider:") \
+                    and summary_text.lower() not in ("none", "nan", ""):
+                info["ai_summary"] = summary_text
+                capture_next_as_summary = False
+            continue
+
+        label_lower = label_raw.lower()
+        if label_lower in _PRODUCT_OVERVIEW_LABELS:
+            key = label_lower.replace(" ", "_")
+            info[key] = value_raw
+        elif label_lower.startswith("provider:"):
+            capture_next_as_summary = True
+
+    return info
+
+
 def _ingest_files(files_data, stream_id):
     """
     Classify rows from all uploaded files into analysis_rows and research_rows.
-    Also reads OEM sheets for regulatory data (pharmaceutical products only).
+    Also reads OEM sheets for regulatory/country data and product sheets for metadata.
 
     files_data: list of {"filename": str, "bytes": bytes}
-    Returns (analysis_rows, research_rows, regulatory_by_file).
-      regulatory_by_file: {filename: [{"oem_name", "regulatory_body", "region",
-                                       "status", "details", "confidence"}, ...]}
-      Non-empty only when the uploaded file was generated for a pharma product
-      (indicated by the presence of "Regulatory Body" column in the OEM sheet).
+    Returns (analysis_rows, research_rows, regulatory_by_file,
+             oem_countries_by_file, product_info_by_file).
     """
-    analysis_rows      = []
-    research_rows      = []
-    regulatory_by_file = {}   # filename → list of regulatory dicts
+    analysis_rows        = []
+    research_rows        = []
+    regulatory_by_file    = {}   # filename → list of regulatory dicts
+    oem_countries_by_file = {}   # filename → {oem_name: country}
+    product_info_by_file  = {}   # filename → product metadata dict
+    file_stats_by_file    = {}   # filename → {tier_num → {total, confirmed, structural, mismatch, inference}}
 
     for item in files_data:
         filename = item["filename"]
@@ -120,6 +169,16 @@ def _ingest_files(files_data, stream_id):
         except Exception as e:
             _log(stream_id, f"[error] Could not open {filename}: {e}", True)
             continue
+
+        # ── Product detail sheet ─────────────────────────────────────────────
+        # The product sheet is the one that is NOT index / oem / tier
+        _skip = ("index", "oem", "tier")
+        product_ws = next(
+            (ws for ws in wb.worksheets
+             if not any(kw in ws.title.lower() for kw in _skip)),
+            None,
+        )
+        product_info_by_file[filename] = _read_product_sheet(product_ws)
 
         # ── Tier sheets ───────────────────────────────────────────────────────
         tier_sheets = [ws for ws in wb.worksheets if "tier" in ws.title.lower()]
@@ -152,6 +211,22 @@ def _ingest_files(files_data, stream_id):
                 supply    = get("supply_ties").lower()       == "yes"
                 component = get("correct_component").lower() == "yes"
 
+                # Track per-tier validation stats for the file summary table
+                tier_stats = (file_stats_by_file
+                              .setdefault(filename, {})
+                              .setdefault(tier_num, {"total": 0, "confirmed": 0,
+                                                      "structural": 0, "mismatch": 0,
+                                                      "inference": 0}))
+                tier_stats["total"] += 1
+                if exists and supply and component:
+                    tier_stats["confirmed"] += 1
+                elif not exists:
+                    tier_stats["structural"] += 1
+                elif exists and not component:
+                    tier_stats["mismatch"] += 1
+                elif exists and not supply and component:
+                    tier_stats["inference"] += 1
+
                 entry = {
                     "company_name": company,
                     "country":      get("country") or "Unknown",
@@ -160,6 +235,7 @@ def _ingest_files(files_data, stream_id):
                     "product":      get("product"),
                     "source_file":  filename,
                     "tier":         tier_num,
+                    "url":          get("url") or "",
                 }
 
                 if exists and supply and component:
@@ -176,13 +252,12 @@ def _ingest_files(files_data, stream_id):
                     research_rows.append(entry)
                 # else: excluded entirely
 
-        # ── OEM sheets — read regulatory data for pharma products ─────────────
-        oem_sheets = [ws for ws in wb.worksheets if "oem" in ws.title.lower()]
-        reg_rows   = []
+        # ── OEM sheets — country data (all products) + regulatory (pharma) ──────
+        oem_sheets      = [ws for ws in wb.worksheets if "oem" in ws.title.lower()]
+        reg_rows        = []
+        oem_country_map = {}   # company_name → country for this file
         for ws in oem_sheets:
             cols = _detect_cols(ws, _OEM_COL_ALIASES)
-            if not cols.get("regulatory_body"):
-                continue  # non-pharma OEM sheet — no regulatory columns
             for row in ws.iter_rows(min_row=2, values_only=True):
                 def oget(key):
                     col = cols.get(key)
@@ -191,22 +266,31 @@ def _ingest_files(files_data, stream_id):
                     val = row[col - 1]
                     return str(val).strip() if val is not None else ""
                 oem_name = oget("company_name")
-                reg_body = oget("regulatory_body")
-                if not oem_name or not reg_body:
+                if not oem_name or oem_name.lower() in ("none", "nan", ""):
                     continue
-                reg_rows.append({
-                    "oem_name":        oem_name,
-                    "regulatory_body": reg_body,
-                    "region":          oget("region"),
-                    "status":          oget("status"),
-                    "details":         oget("details"),
-                    "confidence":      oget("confidence"),
-                })
+                # Always collect country regardless of pharma status
+                country = oget("country")
+                if country and country.lower() not in ("unknown", "none", "nan", ""):
+                    oem_country_map[oem_name] = country
+                # Regulatory data — pharma products only
+                reg_body = oget("regulatory_body")
+                if reg_body:
+                    reg_rows.append({
+                        "oem_name":        oem_name,
+                        "regulatory_body": reg_body,
+                        "region":          oget("region"),
+                        "status":          oget("status"),
+                        "details":         oget("details"),
+                        "confidence":      oget("confidence"),
+                        "product_name":    product_info_by_file.get(filename, {}).get("name", ""),
+                    })
         if reg_rows:
             regulatory_by_file[filename] = reg_rows
             _log(stream_id, f"[pharma] {filename}: {len(reg_rows)} regulatory row(s) found")
+        if oem_country_map:
+            oem_countries_by_file[filename] = oem_country_map
 
-    return analysis_rows, research_rows, regulatory_by_file
+    return analysis_rows, research_rows, regulatory_by_file, oem_countries_by_file, product_info_by_file, file_stats_by_file
 
 
 # ── Pandas analysis ───────────────────────────────────────────────────────────
@@ -276,6 +360,7 @@ def _run_networkx(analysis_rows, stream_id):
 
     G = nx.DiGraph()
     node_inferred = {}
+    company_tier  = {}
 
     for row in analysis_rows:
         src = row["company_name"]
@@ -283,14 +368,16 @@ def _run_networkx(analysis_rows, stream_id):
         if src and dst:
             G.add_edge(src, dst)
             node_inferred[src] = node_inferred.get(src, False) or row["_inferred"]
+            company_tier.setdefault(src, row.get("tier", 1))
 
     # Hub companies — high out-degree (supplies to many customers)
     out_degree = sorted(G.out_degree(), key=lambda x: x[1], reverse=True)
     hub_companies = [
         {
-            "company":          n,
+            "company":           n,
             "supplies_to_count": d,
-            "inferred":         node_inferred.get(n, False),
+            "inferred":          node_inferred.get(n, False),
+            "tier":              company_tier.get(n, 1),
         }
         for n, d in out_degree[:10] if d > 0
     ]
@@ -303,6 +390,7 @@ def _run_networkx(analysis_rows, stream_id):
                 "company":          n,
                 "centrality_score": round(s, 4),
                 "inferred":         node_inferred.get(n, False),
+                "tier":             company_tier.get(n, 1),
             }
             for n, s in sorted(bc.items(), key=lambda x: x[1], reverse=True)[:10]
             if s > 0
@@ -364,14 +452,17 @@ def _analyse_product(rows):
     import networkx as nx
     G = nx.DiGraph()
     node_inferred = {}
+    company_tier  = {}
     for row in rows:
         src, dst = row["company_name"], row["supplies_to"]
         if src and dst:
             G.add_edge(src, dst)
             node_inferred[src] = node_inferred.get(src, False) or row["_inferred"]
+            company_tier.setdefault(src, row.get("tier", 1))
 
     hub_companies = [
-        {"company": n, "supplies_to_count": d, "inferred": node_inferred.get(n, False)}
+        {"company": n, "supplies_to_count": d, "inferred": node_inferred.get(n, False),
+         "tier": company_tier.get(n, 1)}
         for n, d in sorted(G.out_degree(), key=lambda x: x[1], reverse=True)[:5]
         if d > 0
     ]
@@ -379,7 +470,8 @@ def _analyse_product(rows):
     if G.number_of_nodes() > 1:
         bc = nx.betweenness_centrality(G)
         bottlenecks = [
-            {"company": n, "centrality_score": round(s, 4), "inferred": node_inferred.get(n, False)}
+            {"company": n, "centrality_score": round(s, 4), "inferred": node_inferred.get(n, False),
+             "tier": company_tier.get(n, 1)}
             for n, s in sorted(bc.items(), key=lambda x: x[1], reverse=True)[:5]
             if s > 0
         ]
@@ -396,7 +488,7 @@ def _analyse_product(rows):
     return {"hub_companies": hub_companies, "bottlenecks": bottlenecks, "top_components": top_components}
 
 
-def _chart_choropleth(rows, title="Supplier Geographic Concentration"):
+def _chart_choropleth(rows, title="Supplier Geographic Concentration", color_scale="Blues"):
     """Choropleth PNG of supplier countries. Pass all rows for combined, or product rows for per-product."""
     try:
         import plotly.express as px
@@ -410,7 +502,7 @@ def _chart_choropleth(rows, title="Supplier Geographic Concentration"):
         df = pd.DataFrame(list(country_counts.items()), columns=["country", "count"])
         fig = px.choropleth(
             df, locations="country", locationmode="country names",
-            color="count", color_continuous_scale="Blues",
+            color="count", color_continuous_scale=color_scale,
             title=title,
         )
         fig.update_layout(margin={"l": 0, "r": 0, "t": 40, "b": 0}, height=400)
@@ -419,12 +511,20 @@ def _chart_choropleth(rows, title="Supplier Geographic Concentration"):
         return None
 
 
-def _chart_sankey(rows):
-    """Sankey diagram PNG for one product: Tier-N → … → Tier-1 → OEM."""
+def _chart_sankey(rows, tier_filter=None, title="Supply Chain Flow"):
+    """Sankey diagram PNG for one product.
+
+    tier_filter: if given (e.g. 1 or 2), only rows whose 'tier' matches are drawn.
+    Pass tier_filter=1 for Tier-1 → OEM, tier_filter=2 for Tier-2 → Tier-1.
+    """
     try:
         import plotly.graph_objects as go
 
-        # Collect unique node names preserving tier order
+        filtered = [r for r in rows if tier_filter is None or r.get("tier") == tier_filter]
+        if not filtered:
+            return None
+
+        # Collect unique node names preserving insertion order
         node_set, node_index = [], {}
         def _node(name):
             if name not in node_index:
@@ -432,11 +532,10 @@ def _chart_sankey(rows):
                 node_set.append(name)
             return node_index[name]
 
-        # Assign colours by tier (source company's tier)
         tier_colours = {1: "rgba(21,101,192,0.7)", 2: "rgba(230,81,0,0.7)", 3: "rgba(106,27,154,0.7)"}
         link_src, link_tgt, link_val, link_col = [], [], [], []
 
-        for row in rows:
+        for row in filtered:
             src, dst = row.get("company_name", ""), row.get("supplies_to", "")
             if src and dst:
                 link_src.append(_node(src))
@@ -447,30 +546,51 @@ def _chart_sankey(rows):
         if not link_src:
             return None
 
-        # Node colours: OEM = green, else by most common tier of outgoing edges
+        # Node colours — destination nodes (OEM for T1 chart, Tier-1 for T2 chart) get a
+        # distinct colour so the two columns are visually differentiated
         node_tier = {}
-        for row in rows:
+        for row in filtered:
             src = row.get("company_name", "")
             if src:
                 node_tier.setdefault(src, row.get("tier", 1))
-        node_colours = []
-        oem_names = {r.get("supplies_to", "") for r in rows if r.get("supplies_to")} - \
-                    {r.get("company_name", "") for r in rows if r.get("company_name")}
-        for name in node_set:
-            if name in oem_names:
-                node_colours.append("rgba(27,94,32,0.9)")
-            else:
-                node_colours.append(tier_colours.get(node_tier.get(name, 1), "rgba(100,100,100,0.7)"))
+
+        dst_nodes = {r.get("supplies_to", "") for r in filtered if r.get("supplies_to")} - \
+                    {r.get("company_name", "") for r in filtered if r.get("company_name")}
+
+        dst_colour = "rgba(27,94,32,0.9)"   # green for OEM / Tier-1 destination column
+        node_colours = [
+            dst_colour if name in dst_nodes
+            else tier_colours.get(node_tier.get(name, 1), "rgba(100,100,100,0.7)")
+            for name in node_set
+        ]
+
+        # Scale layout to node count — keep the chart wide and compact vertically
+        n_nodes    = len(node_set)
+        fig_h      = max(400, min(1400, n_nodes * 16))  # 16px per node keeps bands slim
+        fig_w      = max(1100, min(1800, 1000 + n_nodes * 6))  # wider than tall
+        font_size  = max(9, 13 - n_nodes // 12)
+        node_pad   = max(3, 10 - n_nodes // 10)
+        node_thick = max(8, 12 - n_nodes // 20)  # thinner bars = less "fat"
+
+        _MAX_LBL = 30
+        display_labels = [
+            n if len(n) <= _MAX_LBL else n[:_MAX_LBL - 1] + "…"
+            for n in node_set
+        ]
 
         fig = go.Figure(go.Sankey(
-            node=dict(label=node_set, color=node_colours, pad=12, thickness=16),
+            arrangement="snap",
+            node=dict(label=display_labels, color=node_colours,
+                      pad=node_pad, thickness=node_thick),
             link=dict(source=link_src, target=link_tgt, value=link_val, color=link_col),
         ))
         fig.update_layout(
-            title_text="Supply Chain Flow (Tier-N → OEM)",
-            font_size=10, height=500, margin={"l": 20, "r": 20, "t": 50, "b": 20},
+            title_text=title,
+            font_size=font_size,
+            height=fig_h,
+            margin={"l": 180, "r": 180, "t": 50, "b": 20},
         )
-        return fig.to_image(format="png", width=900, height=500)
+        return fig.to_image(format="png", width=fig_w, height=fig_h)
     except Exception:
         return None
 
@@ -479,8 +599,8 @@ def _chart_nodemap(rows):
     """Node-link diagram PNG centred on the most important OEM for one product.
 
     Node tier is computed relative to the OEM, not from the global sheet tier:
-      - OEM itself          → green
-      - Directly supplies OEM (relative Tier 1) → blue
+      - OEM itself                               → green
+      - Directly supplies OEM (relative Tier 1)  → blue
       - Supplies a Tier-1 node (relative Tier 2) → orange
     """
     try:
@@ -494,7 +614,6 @@ def _chart_nodemap(rows):
         if not oem:
             return None
 
-        # Build subgraph: OEM + relative Tier-1 + relative Tier-2
         rel_tier1 = {r["company_name"] for r in rows if r.get("supplies_to") == oem}
         subgraph_rows = [
             r for r in rows
@@ -507,19 +626,15 @@ def _chart_nodemap(rows):
         for row in subgraph_rows:
             G.add_edge(row["company_name"], row["supplies_to"])
 
-        # Assign relative tier to each node
         def _rel_tier(node):
-            if node == oem:
-                return 0          # OEM
-            if node in rel_tier1:
-                return 1          # directly feeds OEM
-            return 2              # feeds a Tier-1 node
+            if node == oem:       return 0
+            if node in rel_tier1: return 1
+            return 2
 
         colour_map = {0: "#1B5E20", 1: "#1565C0", 2: "#E65100"}
-        node_list   = list(G.nodes())
-        n_nodes     = len(node_list)
+        node_list  = list(G.nodes())
+        n_nodes    = len(node_list)
 
-        # Scale sizes and font down for large graphs
         if n_nodes <= 12:
             node_size, font_size, k_spread = 900, 8, 2.0
         elif n_nodes <= 25:
@@ -576,7 +691,273 @@ def _add_picture_safe(doc, png_bytes, width_inches=5.5):
         pass
 
 
-def _add_product_section(doc, helpers, display_name, rows, sub_num, regulatory_rows=None):
+def _generate_leaflet_html(rows, oem_countries=None):
+    """Return a self-contained HTML string: Leaflet map with per-company dots and edges.
+
+    All coordinates are resolved in Python via get_coords() + deterministic jitter,
+    then embedded as inline JSON — no geocoding happens in the browser.
+    Uses CartoDB Positron tiles for a clean, fast-loading background.
+    Sets document.title = 'MAP_READY' once the map is fully initialised.
+    """
+    from coords import get_coords
+    import json as _json
+
+    _SKIP = {"", "unknown", "none", "nan", "n/a", "global", "various"}
+
+    def _jitter(name, lat, lng, spread=2.5):
+        h = hash(name) & 0xFFFFFF
+        dlat = ((h        % 1000) - 500) / 500 * spread
+        dlng = (((h >> 8) % 1000) - 500) / 500 * spread
+        return round(lat + dlat, 4), round(lng + dlng, 4)
+
+    # ── Build name → jittered (lat, lng) ──────────────────────────────────
+    coords_map = {}
+
+    for row in rows:
+        name    = (row.get("company_name") or "").strip()
+        country = (row.get("country")      or "").strip()
+        if not name or country.lower() in _SKIP or name in coords_map:
+            continue
+        c = get_coords(country)
+        if c:
+            coords_map[name] = _jitter(name, c[0], c[1])
+
+    for oem_name, country in (oem_countries or {}).items():
+        country = (country or "").strip()
+        if oem_name not in coords_map and country.lower() not in _SKIP:
+            c = get_coords(country)
+            if c:
+                coords_map[oem_name] = _jitter(oem_name, c[0], c[1])
+
+    if not coords_map:
+        return None
+
+    # ── Identify OEM nodes ─────────────────────────────────────────────────
+    all_suppliers = {r.get("company_name", "") for r in rows}
+    all_customers = {r.get("supplies_to",   "") for r in rows}
+    oem_node_names = all_customers - all_suppliers
+
+    # ── Node styling ──────────────────────────────────────────────────────────
+    # OEM: red  Tier 1: cyan  Tier 2: dark gold (#B8860B) — readable on grey map
+    tier_fill   = {"oem": "#d50c0c", 1: "#47c8ff", 2: "#B8860B"}
+    tier_border = {"oem": "#e8ff47", 1: "rgba(0,0,0,0.5)", 2: "rgba(0,0,0,0.6)"}
+    tier_weight = {"oem": 2.5,       1: 1.0,                2: 1.2}
+    tier_radius = {"oem": 10,        1: 7,                  2: 6}
+    # Edge color = same hue as source tier node, semi-transparent
+    edge_colors = {"oem": "rgba(213,12,12,0.55)",
+                   1:     "rgba(71,200,255,0.60)",
+                   2:     "rgba(184,134,11,0.65)"}
+
+    nodes = []
+    seen  = set()
+
+    for row in rows:
+        name = row.get("company_name", "")
+        if name in seen or name not in coords_map:
+            continue
+        seen.add(name)
+        lat, lng = coords_map[name]
+        tier = row.get("tier", 1)
+        nodes.append({
+            "lat": lat, "lng": lng, "name": name,
+            "fill":   tier_fill.get(tier, "#888"),
+            "border": tier_border.get(tier, "rgba(0,0,0,0.5)"),
+            "weight": tier_weight.get(tier, 1.0),
+            "radius": tier_radius.get(tier, 6),
+        })
+
+    for oem in oem_node_names:
+        if oem not in seen and oem in coords_map:
+            seen.add(oem)
+            lat, lng = coords_map[oem]
+            nodes.append({
+                "lat": lat, "lng": lng, "name": oem,
+                "fill":   tier_fill["oem"],
+                "border": tier_border["oem"],
+                "weight": tier_weight["oem"],
+                "radius": tier_radius["oem"],
+            })
+
+    # ── Build edge list ────────────────────────────────────────────────────
+    edges = []
+    for row in rows:
+        src = row.get("company_name", "")
+        dst = row.get("supplies_to",   "")
+        if src not in coords_map or dst not in coords_map:
+            continue
+        tier = row.get("tier", 1)
+        s_lat, s_lng = coords_map[src]
+        d_lat, d_lng = coords_map[dst]
+        edges.append({
+            "from_lat": s_lat, "from_lng": s_lng,
+            "to_lat":   d_lat, "to_lng":   d_lng,
+            "color":    edge_colors.get(tier, "rgba(150,150,150,0.45)"),
+        })
+
+    if not nodes:
+        return None
+
+    nodes_json = _json.dumps(nodes)
+    edges_json = _json.dumps(edges)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    /* Greyscale theme: neutral background so coloured nodes/edges pop */
+    body {{ background: #e8e8e8; }}
+    #map {{ width: 980px; height: 520px; background: #e8e8e8; }}
+    .leaflet-container {{ background: #e8e8e8 !important; }}
+    /* Apply greyscale to the entire tile pane so ocean + land both lose colour */
+    .leaflet-tile-pane {{ filter: grayscale(1) brightness(0.88) contrast(1.05); }}
+    .leaflet-control-attribution {{ display: none; }}
+  </style>
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+<div id="map">
+  <div id="legend" style="
+    position:absolute; bottom:18px; right:12px; z-index:1000;
+    background:rgba(255,255,255,0.92); border:1px solid #ccc;
+    border-radius:5px; padding:10px 14px; font-family:sans-serif;
+    font-size:12px; line-height:1.7; box-shadow:0 2px 6px rgba(0,0,0,0.18);
+    pointer-events:none;">
+    <div style="font-weight:700;font-size:11px;letter-spacing:.06em;
+                text-transform:uppercase;color:#444;margin-bottom:6px;">
+      Supply Chain
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;margin-bottom:3px;">
+      <span style="display:inline-block;width:13px;height:13px;border-radius:50%;
+                   background:#d50c0c;border:2.5px solid #e8ff47;flex-shrink:0;"></span>
+      OEM
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;margin-bottom:3px;">
+      <span style="display:inline-block;width:11px;height:11px;border-radius:50%;
+                   background:#47c8ff;border:1.5px solid rgba(0,0,0,0.4);flex-shrink:0;"></span>
+      Tier 1
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+                   background:#B8860B;border:1.5px solid rgba(0,0,0,0.5);flex-shrink:0;"></span>
+      Tier 2
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <span style="display:inline-block;width:22px;height:0;
+                   border-top:2px dashed #888;flex-shrink:0;"></span>
+      Supply link
+    </div>
+  </div>
+</div>
+<script>
+  var nodes = {nodes_json};
+  var edges = {edges_json};
+
+  var map = L.map('map', {{ zoomControl: false, attributionControl: false }})
+              .setView([20, 10], 2);
+
+  // Same OSM tile source as the frontend
+  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+    {{ maxZoom: 18 }}).addTo(map);
+
+  // Dashed edges first so nodes render on top
+  edges.forEach(function(e) {{
+    L.polyline([[e.from_lat, e.from_lng], [e.to_lat, e.to_lng]], {{
+      color:     e.color,
+      weight:    2,
+      opacity:   0.65,
+      dashArray: '10 8'
+    }}).addTo(map);
+  }});
+
+  // Nodes
+  var latLngs = [];
+  nodes.forEach(function(n) {{
+    latLngs.push([n.lat, n.lng]);
+    L.circleMarker([n.lat, n.lng], {{
+      radius:      n.radius,
+      fillColor:   n.fill,
+      color:       n.border,
+      weight:      n.weight,
+      fillOpacity: 0.9,
+      opacity:     1
+    }}).bindTooltip(n.name).addTo(map);
+  }});
+
+  // Fit map to the spread of nodes with padding
+  if (latLngs.length > 0) {{
+    map.fitBounds(latLngs, {{ padding: [30, 30] }});
+  }}
+
+  // Signal readiness after tiles have a moment to load
+  setTimeout(function() {{ document.title = 'MAP_READY'; }}, 2500);
+</script>
+</body>
+</html>"""
+    return html
+
+
+def _screenshot_leaflet(html_content, browser=None):
+    """Render html_content in a headless Chromium and return a PNG bytes object.
+
+    Pass an open Playwright browser instance to reuse it across multiple calls
+    (avoids the ~2s launch cost per product). If browser is None, a temporary
+    one is launched and closed inside this call.
+    """
+    import tempfile, os, pathlib
+
+    tmp_path = None
+    own_browser = browser is None
+    try:
+        from playwright.sync_api import sync_playwright
+
+        # Write HTML to a temp file so Leaflet can load it via file:// URL
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".html",
+                                         delete=False, encoding="utf-8") as f:
+            f.write(html_content)
+            tmp_path = f.name
+
+        file_url = pathlib.Path(tmp_path).as_uri()
+
+        def _capture(br):
+            page = br.new_page(viewport={"width": 980, "height": 520})
+            try:
+                page.goto(file_url, wait_until="networkidle", timeout=20_000)
+                # Wait until the JS sets the title after the 2.5 s tile delay
+                page.wait_for_function(
+                    "document.title === 'MAP_READY'", timeout=15_000
+                )
+                png = page.locator("#map").screenshot()
+                return png
+            finally:
+                page.close()
+
+        if own_browser:
+            with sync_playwright() as pw:
+                br = pw.chromium.launch(headless=True,
+                                        args=["--no-sandbox",
+                                              "--disable-dev-shm-usage"])
+                try:
+                    return _capture(br)
+                finally:
+                    br.close()
+        else:
+            return _capture(browser)
+
+    except Exception:
+        return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+
+
+def _add_product_section(doc, helpers, display_name, rows, sub_num,
+                         regulatory_rows=None, oem_countries=None, browser=None):
     """Render one product sub-section: metrics tables + optional regulatory + Sankey + node-link."""
     _ct       = helpers["_ct"]
     _hdr_row  = helpers["_hdr_row"]
@@ -586,32 +967,85 @@ def _add_product_section(doc, helpers, display_name, rows, sub_num, regulatory_r
     doc.add_heading(f"{sub_num}. {display_name}", level=2)
 
     metrics = _analyse_product(rows)
+    top_oem = _most_important_oem(rows)
 
-    # Hub companies
+    # ── 1. Identified top OEM + supply network diagram ────────────────────────
+    if top_oem:
+        doc.add_heading(f"Identified Top OEM: {top_oem}", level=3)
+        doc.add_paragraph(
+            f"{top_oem} is the primary OEM for this product, identified as the most common "
+            f"destination node among Tier 1 suppliers."
+        )
+        nodemap_png = _chart_nodemap(rows)
+        if nodemap_png:
+            doc.add_heading("Supply Network Diagram", level=3)
+            _add_picture_safe(doc, nodemap_png, 5.5)
+        doc.add_paragraph()
+
+    # ── 2. Tier 1 and Tier 2 supplier tables ─────────────────────────────────
+    if top_oem:
+        tier1_supplier_rows = [r for r in rows if r.get("supplies_to") == top_oem and r.get("tier") == 1]
+        tier1_names         = {r["company_name"] for r in tier1_supplier_rows}
+        tier2_supplier_rows = [r for r in rows if r.get("tier") == 2 and r.get("supplies_to") in tier1_names]
+
+        if tier1_supplier_rows:
+            doc.add_heading(f"Tier 1 Suppliers to {top_oem}", level=3)
+            tbl = doc.add_table(rows=1, cols=3)
+            tbl.style = "Table Grid"
+            _hdr_row(tbl, ["Company", "Country", "Components Supplied"], "1565C0")
+            for r in tier1_supplier_rows:
+                row = tbl.add_row().cells
+                label = f"⚠ {r['company_name']}" if r.get("_inferred") else r["company_name"]
+                _ct(row[0], label)
+                _ct(row[1], r.get("country", ""))
+                _ct(row[2], r.get("components", ""))
+                if r.get("_inferred"):
+                    _set_bg(row[0], "FFFDE7")
+            doc.add_paragraph()
+
+        if tier2_supplier_rows:
+            doc.add_heading(f"Tier 2 Suppliers (via Tier 1 → {top_oem})", level=3)
+            tbl = doc.add_table(rows=1, cols=4)
+            tbl.style = "Table Grid"
+            _hdr_row(tbl, ["Company", "Country", "Supplies To (Tier 1)", "Components Supplied"], "6A1B9A")
+            for r in tier2_supplier_rows:
+                row = tbl.add_row().cells
+                label = f"⚠ {r['company_name']}" if r.get("_inferred") else r["company_name"]
+                _ct(row[0], label)
+                _ct(row[1], r.get("country", ""))
+                _ct(row[2], r.get("supplies_to", ""))
+                _ct(row[3], r.get("components", ""))
+                if r.get("_inferred"):
+                    _set_bg(row[0], "FFFDE7")
+            doc.add_paragraph()
+
+    # ── 3. Hub companies ──────────────────────────────────────────────────────
     if metrics["hub_companies"]:
         doc.add_heading("Hub Companies", level=3)
-        tbl = doc.add_table(rows=1, cols=3)
+        tbl = doc.add_table(rows=1, cols=4)
         tbl.style = "Table Grid"
-        _hdr_row(tbl, ["Company", "Customers Supplied", "Note"], "1565C0")
+        _hdr_row(tbl, ["Company", "Tier", "Customers Supplied", "Note"], "1565C0")
         for entry in metrics["hub_companies"]:
             row = tbl.add_row().cells
             _flag_row(row, entry)
-            _ct(row[1], entry["supplies_to_count"])
+            _ct(row[1], f"Tier {entry.get('tier', '?')}")
+            _ct(row[2], entry["supplies_to_count"])
         doc.add_paragraph()
 
-    # Bottlenecks
+    # ── 4. Bottlenecks ────────────────────────────────────────────────────────
     if metrics["bottlenecks"]:
         doc.add_heading("Potential Bottlenecks", level=3)
-        tbl = doc.add_table(rows=1, cols=3)
+        tbl = doc.add_table(rows=1, cols=4)
         tbl.style = "Table Grid"
-        _hdr_row(tbl, ["Company", "Centrality Score", "Note"], "6A1B9A")
+        _hdr_row(tbl, ["Company", "Tier", "Centrality Score", "Note"], "6A1B9A")
         for entry in metrics["bottlenecks"]:
             row = tbl.add_row().cells
             _flag_row(row, entry)
-            _ct(row[1], entry["centrality_score"])
+            _ct(row[1], f"Tier {entry.get('tier', '?')}")
+            _ct(row[2], entry["centrality_score"])
         doc.add_paragraph()
 
-    # Key components
+    # ── 5. Key components ─────────────────────────────────────────────────────
     if metrics["top_components"]:
         doc.add_heading("Key Components", level=3)
         tbl = doc.add_table(rows=1, cols=2)
@@ -623,16 +1057,15 @@ def _add_product_section(doc, helpers, display_name, rows, sub_num, regulatory_r
             _ct(row[1], entry["count"])
         doc.add_paragraph()
 
-    # Regulatory status (pharma products only)
+    # ── 6. Regulatory status (pharma only) ───────────────────────────────────
     if regulatory_rows:
-        from docx.shared import RGBColor
         doc.add_heading("Regulatory Status (OEM Manufacturers)", level=3)
 
         _STATUS_COLOURS = {
-            "approved":   ("C8E6C9", "1B5E20"),   # green bg, dark text
+            "approved":   ("C8E6C9", "1B5E20"),
             "registered": ("C8E6C9", "1B5E20"),
-            "pending":    ("FFF9C4", "F57F17"),   # yellow
-            "not found":  ("FFCDD2", "B71C1C"),   # red
+            "pending":    ("FFF9C4", "F57F17"),
+            "not found":  ("FFCDD2", "B71C1C"),
         }
 
         tbl = doc.add_table(rows=1, cols=5)
@@ -651,27 +1084,44 @@ def _add_product_section(doc, helpers, display_name, rows, sub_num, regulatory_r
             _ct(row[4], entry["confidence"])
         doc.add_paragraph()
 
-    # Per-product choropleth
-    choropleth_png = _chart_choropleth(rows, title=f"Geographic Distribution — {display_name}")
-    if choropleth_png:
-        doc.add_heading("Geographic Distribution", level=3)
-        _add_picture_safe(doc, choropleth_png, 5.5)
+    # ── 7. Geographic distribution (one choropleth per tier) ─────────────────
+    tier1_rows    = [r for r in rows if r.get("tier") == 1]
+    tier2_rows    = [r for r in rows if r.get("tier") == 2]
+    oem_ctry_rows = [{"country": c} for c in (oem_countries or {}).values()
+                     if c and c.lower() not in ("unknown", "none", "nan", "")]
+
+    choropleth_specs = [
+        (oem_ctry_rows, "Greens",  f"OEM Manufacturers — {display_name}"),
+        (tier1_rows,    "Blues",   f"Tier 1 Suppliers — {display_name}"),
+        (tier2_rows,    "Purples", f"Tier 2 Suppliers — {display_name}"),
+    ]
+    any_choropleth = False
+    for chart_rows, scale, chart_label in choropleth_specs:
+        if chart_rows:
+            png = _chart_choropleth(chart_rows, title=chart_label, color_scale=scale)
+            if png:
+                if not any_choropleth:
+                    doc.add_heading("Geographic Distribution", level=3)
+                    any_choropleth = True
+                _add_picture_safe(doc, png, 5.5)
+    if any_choropleth:
         doc.add_paragraph()
 
-    # Sankey
+    # ── 8. Supply chain flow (Sankey) ─────────────────────────────────────────
     sankey_png = _chart_sankey(rows)
     if sankey_png:
         doc.add_heading("Supply Chain Flow", level=3)
         _add_picture_safe(doc, sankey_png, 5.5)
         doc.add_paragraph()
 
-    # Node-link
-    oem = _most_important_oem(rows)
-    nodemap_png = _chart_nodemap(rows)
-    if nodemap_png:
-        doc.add_heading(f"Supply Network — Top OEM: {oem}", level=3)
-        _add_picture_safe(doc, nodemap_png, 5.5)
-        doc.add_paragraph()
+    # ── 9. Supplier world map (Leaflet screenshot via headless Chromium) ─────────
+    leaflet_html = _generate_leaflet_html(rows, oem_countries=oem_countries)
+    if leaflet_html:
+        geo_png = _screenshot_leaflet(leaflet_html, browser=browser)
+        if geo_png:
+            doc.add_heading("Supplier World Map", level=3)
+            _add_picture_safe(doc, geo_png, 5.5)
+            doc.add_paragraph()
 
 
 # ── Claude narrative ──────────────────────────────────────────────────────────
@@ -802,9 +1252,263 @@ Return ONLY valid JSON (no markdown):
     return result
 
 
+# ── Per-file verified supply data report ─────────────────────────────────────
+
+def _build_per_file_docx(product_info, file_rows, research_rows_for_file,
+                         reg_rows=None, oem_countries=None):
+    """Build a standalone Word doc for one uploaded Excel file.
+
+    Includes product overview, AI summary, tier tables with a
+    Verified / Model Inference status column, and regulatory landscape if present.
+    """
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    def _set_bg(cell, hex6):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd  = OxmlElement("w:shd")
+        shd.set(qn("w:val"),   "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"),  hex6)
+        tcPr.append(shd)
+
+    def _ct(cell, text, bold=False, size=10, hex_color=None):
+        para = cell.paragraphs[0]
+        run  = para.add_run(str(text) if text is not None else "—")
+        run.bold      = bold
+        run.font.size = Pt(size)
+        if hex_color:
+            b = bytes.fromhex(hex_color)
+            run.font.color.rgb = RGBColor(b[0], b[1], b[2])
+
+    def _hdr_row(tbl, headers, bg_hex):
+        r = tbl.rows[0].cells
+        for i, h in enumerate(headers):
+            _set_bg(r[i], bg_hex)
+            _ct(r[i], h, bold=True, hex_color="FFFFFF")
+
+    doc = Document()
+    for sec in doc.sections:
+        sec.top_margin    = Inches(1)
+        sec.bottom_margin = Inches(1)
+        sec.left_margin   = Inches(1)
+        sec.right_margin  = Inches(1)
+
+    # Title
+    product_name = product_info.get("name") or "Unknown Product"
+    t = doc.add_heading(f"{product_name} — Verified Supply Data Report", 0)
+    t.runs[0].font.color.rgb = RGBColor(0x1A, 0x23, 0x7E)
+
+    date_para = doc.add_paragraph(f"Generated: {datetime.datetime.now().strftime('%B %d, %Y %H:%M:%S')}")
+    date_para.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+    verified_count = sum(1 for r in file_rows if not r.get("_inferred"))
+    inferred_count = sum(1 for r in file_rows if r.get("_inferred"))
+    tier1_count    = sum(1 for r in file_rows if r.get("tier") == 1)
+    tier2_count    = sum(1 for r in file_rows if r.get("tier") == 2)
+    oem_names      = {r["supplies_to"] for r in file_rows if r.get("tier") == 1 and r.get("supplies_to")}
+    oem_count      = len(oem_names)
+
+    counts_data = [
+        ("OEM Manufacturers", oem_count),
+        ("Tier 1 Suppliers",  tier1_count),
+        ("Tier 2 Suppliers",  tier2_count),
+        ("Fully Verified",    verified_count),
+        ("Model Inference",   inferred_count),
+    ]
+    counts_tbl = doc.add_table(rows=len(counts_data), cols=2)
+    counts_tbl.style = "Table Grid"
+    for i, (label, val) in enumerate(counts_data):
+        cells = counts_tbl.rows[i].cells
+        _ct(cells[0], label, bold=True)
+        _set_bg(cells[0], "E8EAF6")
+        _ct(cells[1], val)
+    doc.add_paragraph()
+
+    # Product overview
+    overview = [
+        ("Category",         product_info.get("category", "")),
+        ("Industry",         product_info.get("industry", "")),
+        ("OEM Manufacturer", product_info.get("oem_manufacturer", "")),
+        ("OEM Country",      product_info.get("oem_country", "")),
+        ("Key Components",   product_info.get("key_components", "")),
+        ("Description",      product_info.get("description", "")),
+    ]
+    has_overview = any(v for _, v in overview)
+    if has_overview:
+        doc.add_heading("1. Product Overview", level=1)
+        tbl = doc.add_table(rows=len(overview), cols=2)
+        tbl.style = "Table Grid"
+        for i, (label, value) in enumerate(overview):
+            cells = tbl.rows[i].cells
+            _ct(cells[0], label, bold=True)
+            _set_bg(cells[0], "E8EAF6")
+            _ct(cells[1], value)
+        doc.add_paragraph()
+
+    # AI summary
+    ai_summary = product_info.get("ai_summary", "")
+    if ai_summary:
+        doc.add_heading("2. AI Analysis Summary", level=1)
+        doc.add_paragraph(ai_summary)
+        doc.add_paragraph()
+
+    next_sec = 3
+
+    # ── OEM Manufacturers table ───────────────────────────────────────────────
+    oem_names_ordered = []
+    seen_oems = set()
+    for r in file_rows:
+        oem = r.get("supplies_to", "")
+        if r.get("tier") == 1 and oem and oem not in seen_oems:
+            seen_oems.add(oem)
+            oem_names_ordered.append(oem)
+
+    if oem_names_ordered:
+        doc.add_heading(f"{next_sec}. OEM Manufacturers", level=1)
+        tbl = doc.add_table(rows=1, cols=2)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["OEM Manufacturer", "Country"], "1A237E")
+        _oem_ctry = oem_countries or {}
+        for oem in oem_names_ordered:
+            cells = tbl.add_row().cells
+            _ct(cells[0], oem, bold=True)
+            _ct(cells[1], _oem_ctry.get(oem, ""))
+        doc.add_paragraph()
+        next_sec += 1
+
+    # ── Tier tables ───────────────────────────────────────────────────────────
+    _TIER_COLORS = {1: "1565C0", 2: "6A1B9A"}
+
+    def _set_col_widths(tbl, widths_inches):
+        """Force exact column widths via XML on every cell in the table.
+
+        Must be called AFTER all rows have been added — it iterates over
+        every row so new rows pick up the correct widths too.
+        Also disables Word's autofit so the widths are not overridden on open.
+        """
+        tbl.allow_autofit = False
+        for row in tbl.rows:
+            for col_idx, cell in enumerate(row.cells):
+                if col_idx >= len(widths_inches):
+                    break
+                tc   = cell._tc
+                tcPr = tc.get_or_add_tcPr()
+                for old in tcPr.findall(qn("w:tcW")):
+                    tcPr.remove(old)
+                tcW = OxmlElement("w:tcW")
+                tcW.set(qn("w:w"),    str(int(widths_inches[col_idx] * 1440)))
+                tcW.set(qn("w:type"), "dxa")
+                tcPr.append(tcW)
+
+    def _add_url_lines(cell, raw_url_str, size=7.5):
+        """Write the first 4 URLs (company-exists results) one per line.
+        Inserts zero-width spaces after '/', '?' and '&' so Word can line-break
+        long URLs at sensible points without the text overflowing the column.
+        """
+        if not raw_url_str:
+            _ct(cell, "—", size=size)
+            return
+        urls = [u.strip() for u in raw_url_str.split(",") if u.strip()][:4]
+        para = cell.paragraphs[0]
+        para.paragraph_format.space_after = Pt(2)
+        for i, url in enumerate(urls):
+            if i > 0:
+                para.add_run("\n")
+            # Insert zero-width space (​) after break-friendly characters
+            breakable = url.replace("/", "/​").replace("?", "?​").replace("&", "&​").replace("=", "=​").replace("-", "-​")
+            run = para.add_run(breakable)
+            run.font.size = Pt(size)
+            run.font.color.rgb = RGBColor(0x15, 0x65, 0xC0)
+
+    # Column widths (inches) — total 6.5" for letter page with 1" margins each side
+    # Company | Country | Supplies To | Components | Status | URLs
+    _TIER_COL_WIDTHS = [1.2, 0.75, 1.0, 1.05, 0.65, 1.85]
+
+    for tier_num in (1, 2):
+        tier_rows = [r for r in file_rows if r.get("tier") == tier_num]
+        if not tier_rows:
+            continue
+        doc.add_heading(f"{next_sec}. Tier {tier_num} Suppliers", level=1)
+        tbl = doc.add_table(rows=1, cols=6)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl,
+                 ["Company", "Country", "Supplies To", "Components Supplied",
+                  "Status", "Verification URLs"],
+                 _TIER_COLORS.get(tier_num, "37474F"))
+        for row in tier_rows:
+            cells = tbl.add_row().cells
+            is_inferred = row.get("_inferred", False)
+            label_name  = f"⚠ {row['company_name']}" if is_inferred else row["company_name"]
+            _ct(cells[0], label_name, size=9)
+            _ct(cells[1], row.get("country", ""), size=9)
+            _ct(cells[2], row.get("supplies_to", ""), size=9)
+            _ct(cells[3], row.get("components", ""), size=9)
+            status = "Model Inference" if is_inferred else "Verified"
+            _ct(cells[4], status, size=9)
+            if is_inferred:
+                _set_bg(cells[4], "FFFDE7")
+            else:
+                _set_bg(cells[4], "C8E6C9")
+            _add_url_lines(cells[5], row.get("url", ""))
+        # Apply widths after all rows exist so every row cell gets set
+        _set_col_widths(tbl, _TIER_COL_WIDTHS)
+        doc.add_paragraph()
+        next_sec += 1
+
+    # Regulatory landscape (pharma only — present when OEM sheet has regulatory_body column)
+    if reg_rows:
+        doc.add_heading(f"{next_sec}. Regulatory Landscape", level=1)
+        _REG_STATUS_COLOURS = {
+            "approved":   "C8E6C9",
+            "registered": "C8E6C9",
+            "pending":    "FFF9C4",
+            "not found":  "FFCDD2",
+        }
+        tbl = doc.add_table(rows=1, cols=5)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["OEM Manufacturer", "Regulatory Body", "Region", "Status", "Confidence"], "4A148C")
+        for entry in reg_rows:
+            cells = tbl.add_row().cells
+            _ct(cells[0], entry.get("oem_name", ""))
+            _ct(cells[1], entry.get("regulatory_body", ""))
+            _ct(cells[2], entry.get("region", ""))
+            _ct(cells[3], entry.get("status", ""))
+            bg = _REG_STATUS_COLOURS.get((entry.get("status") or "").lower(), "F5F5F5")
+            _set_bg(cells[3], bg)
+            _ct(cells[4], entry.get("confidence", ""))
+        doc.add_paragraph()
+        next_sec += 1
+
+    # Requires further research
+    if research_rows_for_file:
+        doc.add_heading(f"{next_sec}. Requires Further Research", level=1)
+        doc.add_paragraph(
+            "The following entries have confirmed company existence and supply ties "
+            "but the component supplied could not be verified."
+        )
+        tbl = doc.add_table(rows=1, cols=3)
+        tbl.style = "Table Grid"
+        _hdr_row(tbl, ["Company", "Supplies To", "Country"], "BF360C")
+        for row in research_rows_for_file:
+            cells = tbl.add_row().cells
+            _ct(cells[0], row["company_name"])
+            _ct(cells[1], row.get("supplies_to", ""))
+            _ct(cells[2], row.get("country", ""))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 # ── DOCX builder ──────────────────────────────────────────────────────────────
 
-def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_file=None):  # noqa: C901
+def _build_docx(metrics, narrative, analysis_rows, research_rows,  # noqa: C901
+                regulatory_by_file=None, oem_countries_by_file=None,
+                file_stats_by_file=None):
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
     from docx.oxml.ns import qn
@@ -884,8 +1588,191 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
     doc.add_heading("1. Executive Summary", level=1)
     _add_narrative(narrative.get("executive_summary", ""))
 
+    # ── Validation Methodology & Findings ────────────────────────────────────
+    doc.add_heading("2. Validation Methodology & Findings", level=1)
+    doc.add_paragraph(
+        "Each entry generated by the discovery pipeline was independently verified through an "
+        "automated web-crawl and LLM-judge process. Verification assessed three questions for "
+        "each supplier row and produced a binary Yes/No verdict for each."
+    )
+
+    doc.add_heading("Data Generation Process", level=2)
+    doc.add_paragraph(
+        "Supply chain data was generated using an agentic pipeline (Gemini 2.5 Flash for "
+        "non-China suppliers, DeepSeek Chat for China-based suppliers) that identified OEM "
+        "manufacturers, Tier 1 direct suppliers, and Tier 2 sub-suppliers for each product. "
+        "Both models ran in parallel at every step and their outputs were merged and deduplicated "
+        "before moving on. Prior to each LLM call, live web evidence was retrieved via DuckDuckGo "
+        "and scraped with Crawl4AI (up to 4 pages, 2 000 characters each) and injected into the "
+        "prompt — grounding outputs in current web data rather than solely training knowledge. "
+        "All LLM outputs were treated as unverified hypotheses and passed to the verification "
+        "pipeline before use in any analysis."
+    )
+    doc.add_paragraph(
+        "Each entry in the exported workbook contains: Company Name, Country, Supplies To, "
+        "OEM Root, Components Supplied, Confidence (high/medium/low), and Source Hint."
+    )
+
+    doc.add_heading("Automated Verification Pipeline", level=2)
+    doc.add_paragraph(
+        "The verification pipeline answered three independent questions for each supplier row "
+        "using web search evidence. Three separate DuckDuckGo searches were run, each scraping "
+        "up to 4 pages via Crawl4AI. The combined evidence (up to ~6 000 characters) was sent "
+        "to an LLM in a single call that answered all three questions simultaneously. Each "
+        "verdict was labelled with its evidence source — web_evidence if a confirming source "
+        "was found, or training_knowledge if the model fell back to its parametric knowledge. "
+        "All rows across all tier sheets were processed in parallel."
+    )
+    vp_tbl = doc.add_table(rows=1, cols=3)
+    vp_tbl.style = "Table Grid"
+    _hdr_row(vp_tbl, ["Question", "Search Query Used", "Output Field"], "1A237E")
+    _vp_rows = [
+        ('Q1 — Does this company exist?',
+         '"{company_name}" supplier manufacturer',
+         'Company Exists = Yes / No'),
+        ('Q2 — Is there a supply relationship between this company and its stated customer?',
+         '"{company_name}" "{supplies_to}" supply partnership',
+         'Supply Ties = Yes / No'),
+        ('Q3 — Does this company supply the stated component?',
+         '"{company_name}" "{components_supplied}" manufacture supply',
+         'Correct Component = Yes / No'),
+    ]
+    for q, query, output in _vp_rows:
+        row = vp_tbl.add_row().cells
+        _ct(row[0], q)
+        _ct(row[1], query)
+        _ct(row[2], output)
+    doc.add_paragraph()
+
+    doc.add_heading("Entry Classification Framework", level=2)
+    doc.add_paragraph(
+        "Each row was classified into one of three categories based on the combination of "
+        "verdicts across the three verification questions:"
+    )
+    cls_tbl = doc.add_table(rows=1, cols=3)
+    cls_tbl.style = "Table Grid"
+    _hdr_row(cls_tbl, ["Classification", "Criteria", "Treatment in This Report"], "1A237E")
+    _clf_rows = [
+        ("Confirmed Entry (3 Yes)",
+         "Company Exists = Yes, Supply Ties = Yes, Correct Component = Yes. "
+         "Web evidence found for all three questions.",
+         "Used as ground truth in all calculations.",
+         "C8E6C9"),
+        ("Strong Entry (CE + CC)",
+         "Company Exists = Yes, Correct Component = Yes. "
+         "Supply Ties could not be corroborated by a public web source. "
+         "The supplier is real and produces the correct component, but the specific commercial "
+         "relationship is undocumented — consistent with supply agreements being treated as "
+         "commercially sensitive trade secrets.",
+         "Included in analysis, flagged ⚠ as model inference.",
+         "FFFDE7"),
+        ("Excluded / Flagged Entry",
+         "Company Exists = No, or Correct Component = No, or the row is structurally invalid.",
+         "Excluded from all quantitative analysis.",
+         "FFCDD2"),
+    ]
+    for cls_label, criteria, treatment, bg in _clf_rows:
+        row = cls_tbl.add_row().cells
+        _ct(row[0], cls_label, bold=True)
+        _ct(row[1], criteria)
+        _ct(row[2], treatment)
+        _set_bg(row[0], bg)
+    doc.add_paragraph(
+        "The absence of a confirming URL for Supply Ties is not treated as evidence of an "
+        "error in the generated data. Specific commercial procurement relationships between "
+        "named companies are rarely disclosed publicly — they surface only through press "
+        "releases announcing strategic partnerships, joint ventures, equity investments, or "
+        "supplier-award announcements. The verification pipeline's inability to find such a "
+        "source reflects the fundamental opacity of procurement relationships, not a flaw in "
+        "the underlying supply chain entry."
+    )
+    doc.add_paragraph()
+
+    doc.add_heading("Structural Flags", level=2)
+    doc.add_paragraph(
+        "In addition to the three-tier quality classification, entries were reviewed for "
+        "structural validity. Rows were flagged under the following conditions:"
+    )
+    for flag_text in [
+        "OEM-as-Tier-1 Supplier — a company designated as an OEM end-product manufacturer was listed as a Tier 1 component supplier to another OEM (role confusion in the generated data).",
+        "Tier-1-as-Tier-2 Supplier — a company already present in the Tier 1 sheet was duplicated as a Tier 2 supplier (inflates apparent supply chain depth).",
+        "Self-Loop — the Supplies To field contains the same entity as the Company Name (structurally invalid relationship).",
+        "Tier Misclassification — the described relationship is inverted (a downstream customer listed as supplying to its own vendor).",
+    ]:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(flag_text)
+    doc.add_paragraph(
+        "Flagged rows are excluded from all classification counts and surfaced separately "
+        "in the 'Requires Further Research' section."
+    )
+    doc.add_paragraph()
+
+    # ── Aggregate validation findings table ──────────────────────────────────
+    doc.add_heading("Aggregate Validation Findings", level=2)
+    doc.add_paragraph(
+        "The table below consolidates validation results across all uploaded files, broken down "
+        "by tier level. Confirmed = all three validation fields Yes. "
+        "Strong = Company Exists and Correct Component both Yes, Supply Ties not confirmed. "
+        "Flagged = structural error or component mismatch (excluded from Confirmed/Strong counts). "
+        "Percentages are relative to total entries for that tier."
+    )
+
+    # Aggregate file_stats_by_file across all files, keyed by tier_num
+    agg = {}
+    for tier_map in (file_stats_by_file or {}).values():
+        for tier_num, ts in tier_map.items():
+            a = agg.setdefault(tier_num, {"total": 0, "confirmed": 0, "inference": 0,
+                                           "structural": 0, "mismatch": 0})
+            for k in a:
+                a[k] += ts[k]
+
+    agg_tbl = doc.add_table(rows=1, cols=8)
+    agg_tbl.style = "Table Grid"
+    _hdr_row(agg_tbl, ["Tier Level", "Total Entries",
+                        "Confirmed (3 Yes)", "%",
+                        "Strong (CE+CC)", "%",
+                        "Flagged", "%"], "1A237E")
+
+    totals = {"total": 0, "confirmed": 0, "inference": 0, "flagged": 0}
+    for tier_num in sorted(agg.keys()):
+        a    = agg[tier_num]
+        tot  = a["total"]
+        conf = a["confirmed"]
+        inf  = a["inference"]
+        flag = a["structural"] + a["mismatch"]
+        pct  = lambda n: f"{n/tot*100:.1f}%" if tot else "—"
+        row  = agg_tbl.add_row().cells
+        _ct(row[0], f"Tier {tier_num}")
+        _ct(row[1], str(tot))
+        _ct(row[2], str(conf));  _set_bg(row[2], "C8E6C9")
+        _ct(row[3], pct(conf))
+        _ct(row[4], str(inf));   _set_bg(row[4], "FFFDE7")
+        _ct(row[5], pct(inf))
+        _ct(row[6], str(flag));  _set_bg(row[6], "FFCDD2")
+        _ct(row[7], pct(flag))
+        totals["total"]    += tot
+        totals["confirmed"] += conf
+        totals["inference"] += inf
+        totals["flagged"]   += flag
+
+    # TOTAL row
+    tt   = totals["total"]
+    tpct = lambda n: f"{n/tt*100:.1f}%" if tt else "—"
+    row  = agg_tbl.add_row().cells
+    _ct(row[0], "TOTAL", bold=True)
+    _ct(row[1], str(tt), bold=True)
+    _ct(row[2], str(totals["confirmed"]), bold=True);  _set_bg(row[2], "C8E6C9")
+    _ct(row[3], tpct(totals["confirmed"]), bold=True)
+    _ct(row[4], str(totals["inference"]),  bold=True);  _set_bg(row[4], "FFFDE7")
+    _ct(row[5], tpct(totals["inference"]),  bold=True)
+    _ct(row[6], str(totals["flagged"]),    bold=True);  _set_bg(row[6], "FFCDD2")
+    _ct(row[7], tpct(totals["flagged"]),    bold=True)
+    for cell in row:
+        _set_bg(cell, "ECEFF1") if cell.text not in ("", "—") else None
+    doc.add_paragraph()
+
     # ── Geographical Concentration ───────────────────────────────────────────
-    doc.add_heading("2. Geographical Concentration", level=1)
+    doc.add_heading("3. Geographical Concentration", level=1)
     _add_narrative(narrative.get("geo_concentration", ""))
 
     if metrics["country_concentration"]:
@@ -917,7 +1804,7 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
     doc.add_paragraph()
 
     # ── Key Components ───────────────────────────────────────────────────────
-    doc.add_heading("3. Key Components", level=1)
+    doc.add_heading("4. Key Components", level=1)
     _add_narrative(narrative.get("key_components", ""))
     tbl = doc.add_table(rows=1, cols=2)
     tbl.style = "Table Grid"
@@ -930,31 +1817,33 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
 
 
     # ── Hub Companies ────────────────────────────────────────────────────────
-    doc.add_heading("4. Hub Companies", level=1)
+    doc.add_heading("5. Hub Companies", level=1)
     _add_narrative(narrative.get("hub_companies", ""))
-    tbl = doc.add_table(rows=1, cols=3)
+    tbl = doc.add_table(rows=1, cols=4)
     tbl.style = "Table Grid"
-    _hdr_row(tbl, ["Company", "Customers Supplied", "Note"], "1565C0")
+    _hdr_row(tbl, ["Company", "Tier", "Customers Supplied", "Note"], "1565C0")
     for entry in metrics["hub_companies"]:
         row = tbl.add_row().cells
         _flag_row(row, entry)
-        _ct(row[1], entry["supplies_to_count"])
+        _ct(row[1], f"Tier {entry.get('tier', '?')}")
+        _ct(row[2], entry["supplies_to_count"])
     doc.add_paragraph()
 
     # ── Bottlenecks ──────────────────────────────────────────────────────────
-    doc.add_heading("5. Potential Bottlenecks", level=1)
+    doc.add_heading("6. Potential Bottlenecks", level=1)
     _add_narrative(narrative.get("bottlenecks", ""))
-    tbl = doc.add_table(rows=1, cols=3)
+    tbl = doc.add_table(rows=1, cols=4)
     tbl.style = "Table Grid"
-    _hdr_row(tbl, ["Company", "Centrality Score", "Note"], "6A1B9A")
+    _hdr_row(tbl, ["Company", "Tier", "Centrality Score", "Note"], "6A1B9A")
     for entry in metrics["bottleneck_companies"]:
         row = tbl.add_row().cells
         _flag_row(row, entry)
-        _ct(row[1], entry["centrality_score"])
+        _ct(row[1], f"Tier {entry.get('tier', '?')}")
+        _ct(row[2], entry["centrality_score"])
     doc.add_paragraph()
 
     # ── Regulatory Analysis (pharma only) ────────────────────────────────────
-    next_sec = 6
+    next_sec = 7
     all_reg_rows = []
     if regulatory_by_file:
         for rows in regulatory_by_file.values():
@@ -966,9 +1855,9 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
         if reg_narrative:
             _add_narrative(reg_narrative)
 
-        tbl = doc.add_table(rows=1, cols=5)
+        tbl = doc.add_table(rows=1, cols=6)
         tbl.style = "Table Grid"
-        _hdr_row(tbl, ["OEM Manufacturer", "Regulatory Body", "Region", "Status", "Confidence"], "4A148C")
+        _hdr_row(tbl, ["Drug / Product", "OEM Manufacturer", "Regulatory Body", "Region", "Status", "Confidence"], "4A148C")
 
         _REG_STATUS_COLOURS = {
             "approved":   "C8E6C9",
@@ -978,13 +1867,14 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
         }
         for entry in all_reg_rows:
             row = tbl.add_row().cells
-            _ct(row[0], entry["oem_name"])
-            _ct(row[1], entry["regulatory_body"])
-            _ct(row[2], entry["region"])
-            _ct(row[3], entry["status"])
+            _ct(row[0], entry.get("product_name", ""))
+            _ct(row[1], entry["oem_name"])
+            _ct(row[2], entry["regulatory_body"])
+            _ct(row[3], entry["region"])
+            _ct(row[4], entry["status"])
             bg = _REG_STATUS_COLOURS.get((entry["status"] or "").lower(), "F5F5F5")
-            _set_bg(row[3], bg)
-            _ct(row[4], entry["confidence"])
+            _set_bg(row[4], bg)
+            _ct(row[5], entry["confidence"])
         doc.add_paragraph()
         next_sec += 1
 
@@ -1037,13 +1927,42 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
         "The following sub-sections provide per-product analysis including hub companies, "
         "potential bottlenecks, key components, and supply chain visualisations."
     )
-    reg = regulatory_by_file or {}
-    for sub_i, (display_name, prod_rows) in enumerate(product_groups, 1):
-        # Regulatory rows keyed by source file — all rows in a group share the same source file
-        source_file   = prod_rows[0]["source_file"] if prod_rows else None
-        reg_rows_prod = reg.get(source_file, [])
-        _add_product_section(doc, _docx_helpers, display_name, prod_rows,
-                             f"{next_sec}.{sub_i}", regulatory_rows=reg_rows_prod)
+    reg      = regulatory_by_file   or {}
+    oem_ctry = oem_countries_by_file or {}
+
+    # Launch one shared Playwright browser for all per-product Leaflet screenshots
+    _pw_ctx  = None
+    _browser = None
+    try:
+        from playwright.sync_api import sync_playwright
+        _pw_ctx    = sync_playwright().__enter__()
+        _browser   = _pw_ctx.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+    except Exception:
+        pass   # Playwright unavailable — screenshots fall back to None gracefully
+
+    try:
+        for sub_i, (display_name, prod_rows) in enumerate(product_groups, 1):
+            source_file   = prod_rows[0]["source_file"] if prod_rows else None
+            reg_rows_prod = reg.get(source_file, [])
+            oem_ctry_prod = oem_ctry.get(source_file, {})
+            _add_product_section(doc, _docx_helpers, display_name, prod_rows,
+                                 f"{next_sec}.{sub_i}", regulatory_rows=reg_rows_prod,
+                                 oem_countries=oem_ctry_prod, browser=_browser)
+    finally:
+        if _browser:
+            try:
+                _browser.close()
+            except Exception:
+                pass
+        if _pw_ctx:
+            try:
+                _pw_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
+
     doc.add_paragraph()
     next_sec += 1
 
@@ -1086,9 +2005,12 @@ def _build_docx(metrics, narrative, analysis_rows, research_rows, regulatory_by_
 
 # ── Background worker ─────────────────────────────────────────────────────────
 
-def _run_insights(stream_id, files_data):
+def _run_insights(stream_id, files_data, per_file_download=True):
+    import time as _time
     try:
-        analysis_rows, research_rows, regulatory_by_file = _ingest_files(files_data, stream_id)
+        (analysis_rows, research_rows, regulatory_by_file,
+         oem_countries_by_file, product_info_by_file,
+         file_stats_by_file) = _ingest_files(files_data, stream_id)
 
         if not analysis_rows:
             _push(stream_id, {
@@ -1101,6 +2023,44 @@ def _run_insights(stream_id, files_data):
         pharma_note = f" 💊 {total_reg} regulatory row(s) found." if total_reg else ""
         _status(stream_id, f"✅ {len(analysis_rows)} analysis rows loaded ({sum(1 for r in analysis_rows if not r['_inferred'])} verified, {sum(1 for r in analysis_rows if r['_inferred'])} inferred). {len(research_rows)} flagged for further research.{pharma_note}")
 
+        # ── Per-file verified supply data reports ─────────────────────────────
+        if per_file_download:
+            rows_by_file = {}
+            for row in analysis_rows:
+                rows_by_file.setdefault(row["source_file"], []).append(row)
+            research_by_file = {}
+            for row in research_rows:
+                research_by_file.setdefault(row["source_file"], []).append(row)
+
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            for file_idx, filename in enumerate(rows_by_file):
+                _status(stream_id, f"📄 Building per-file report for {filename}…")
+                pinfo         = product_info_by_file.get(filename, {})
+                file_rows     = rows_by_file[filename]
+                file_research = research_by_file.get(filename, [])
+                file_reg      = regulatory_by_file.get(filename, [])
+                per_file_bytes = _build_per_file_docx(
+                    pinfo, file_rows, file_research,
+                    reg_rows=file_reg or None,
+                    oem_countries=oem_countries_by_file.get(filename, {}),
+                )
+
+                safe_name = re.sub(r'[^A-Za-z0-9_\-]', '_',
+                                   pinfo.get("name") or filename.replace(".xlsx", ""))
+                doc_name  = f"{safe_name}_verified_supply_data_report_{ts}.docx"
+                file_key  = f"{stream_id}_{file_idx}"
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                    tmp.write(per_file_bytes)
+                    tmp_path = tmp.name
+
+                with _insights_file_lock:
+                    _insights_file_store[file_key] = {"path": tmp_path, "filename": doc_name}
+
+                _push(stream_id, {"type": "download_file", "key": file_key, "filename": doc_name})
+                _time.sleep(0.35)
+
+        # ── Combined insights report ──────────────────────────────────────────
         pandas_metrics = _run_pandas(analysis_rows, stream_id)
         graph_metrics  = _run_networkx(analysis_rows, stream_id)
 
@@ -1127,20 +2087,22 @@ def _run_insights(stream_id, files_data):
         narrative = _generate_narrative(metrics, stream_id, regulatory_by_file=regulatory_by_file)
 
         _status(stream_id, "🗺️ Generating choropleth map…")
-        _status(stream_id, "📄 Building DOCX report (per-product charts may take ~10s)…")
+        _status(stream_id, "📄 Building combined insights report (per-product charts may take ~10s)…")
         docx_bytes = _build_docx(metrics, narrative, analysis_rows, research_rows,
-                                 regulatory_by_file=regulatory_by_file)
+                                 regulatory_by_file=regulatory_by_file,
+                                 oem_countries_by_file=oem_countries_by_file,
+                                 file_stats_by_file=file_stats_by_file)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
             tmp.write(docx_bytes)
             tmp_path = tmp.name
 
-        date_str  = datetime.date.today().strftime("%Y%m%d")
+        date_str  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename  = f"supply_chain_insights_{date_str}.docx"
         with _insights_store_lock:
             _insights_store[stream_id] = {"path": tmp_path, "filename": filename}
 
-        _status(stream_id, "✅ Report ready — downloading…")
+        _status(stream_id, "✅ Combined report ready — downloading…")
 
     except Exception as e:
         _push(stream_id, {"type": "error", "message": str(e)})
@@ -1203,8 +2165,13 @@ def insights_page():
   <input type="file" id="hiddenInput" accept=".xlsx" multiple style="display:none" onchange="addFiles(this.files)">
   <button id="addBtn" onclick="document.getElementById('hiddenInput').click()">+ Add Files</button>
 
-  <div style="margin-top:1rem">
+  <div style="margin-top:1rem;display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap">
     <button id="genBtn" onclick="generateInsights()">▶ Generate Report</button>
+    <label style="display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:#aaa;cursor:pointer;user-select:none">
+      <input type="checkbox" id="perFileChk" checked
+             style="width:14px;height:14px;accent-color:#e8ff47;cursor:pointer">
+      Download individual verified report for each file
+    </label>
   </div>
 
   <div id="timer">⏱ Elapsed: <span id="timerVal">0.0s</span></div>
@@ -1290,6 +2257,7 @@ def insights_page():
 
       const fd = new FormData();
       for (const f of fileQueue) fd.append('files', f);
+      fd.append('per_file_download', document.getElementById('perFileChk').checked ? 'true' : 'false');
 
       let streamId;
       try {
@@ -1318,6 +2286,12 @@ def insights_page():
           stopTimer(); setRunning(false);
           append('Error: ' + msg.message, 'error');
           es.close();
+        } else if (msg.type === 'download_file') {
+          const a = document.createElement('a');
+          a.href = '/api/insights/download_file/' + msg.key;
+          a.download = msg.filename;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          append('📄 Downloaded: ' + msg.filename, 'done');
         } else if (msg.type === 'stream_end') {
           stopTimer(); setRunning(false);
           es.close();
@@ -1325,7 +2299,7 @@ def insights_page():
           a.href = '/api/insights/download/' + streamId;
           a.download = '';
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          append('✓ Report downloaded.', 'done');
+          append('✓ Combined insights report downloaded.', 'done');
         }
       };
 
@@ -1353,13 +2327,15 @@ def insights_generate():
             return jsonify({"error": f"{f.filename} is not an .xlsx file"}), 400
         files_data.append({"filename": f.filename, "bytes": f.read()})
 
+    per_file_download = request.form.get("per_file_download", "true").lower() == "true"
+
     stream_id = uuid.uuid4().hex
     with _insights_queues_lock:
         _insights_queues[stream_id] = []
 
     threading.Thread(
         target=_run_insights,
-        args=(stream_id, files_data),
+        args=(stream_id, files_data, per_file_download),
         daemon=True,
     ).start()
 
@@ -1400,6 +2376,35 @@ def insights_download(stream_id):
 
     if not entry:
         return jsonify({"error": "Report not found or already downloaded"}), 404
+
+    path     = entry["path"]
+    filename = entry["filename"]
+
+    response = send_file(
+        path,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    @response.call_on_close
+    def cleanup():
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    return response
+
+
+@insights_bp.route("/api/insights/download_file/<key>")
+def insights_download_file(key):
+    """Serve a per-file verified supply data report and delete the temp file after."""
+    with _insights_file_lock:
+        entry = _insights_file_store.pop(key, None)
+
+    if not entry:
+        return jsonify({"error": "File report not found or already downloaded"}), 404
 
     path     = entry["path"]
     filename = entry["filename"]

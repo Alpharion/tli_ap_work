@@ -22,6 +22,7 @@ from excel_export import build_bulk_workbook
 from pipeline import run_pipeline, run_agentic_pipeline
 from audit import audit_bp
 from insights import insights_bp
+from reg_crawl import reg_crawl_bp
 from report_export import report_bp
 from verify import verify_bp
 
@@ -31,6 +32,7 @@ app.register_blueprint(audit_bp)
 app.register_blueprint(verify_bp)
 app.register_blueprint(report_bp)
 app.register_blueprint(insights_bp)
+app.register_blueprint(reg_crawl_bp)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 

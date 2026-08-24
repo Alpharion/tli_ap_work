@@ -29,9 +29,10 @@ def _normalise_name(name: str) -> str:
 
 def _merge_dedup(gemini_results: list, deepseek_results: list) -> list:
     """Union of two supplier lists. On name collision, Gemini's entry wins."""
-    seen   = {_normalise_name(e.get("company_name", "")) for e in gemini_results if e.get("company_name")}
-    merged = list(gemini_results)
+    seen   = {_normalise_name(e.get("company_name", "")) for e in gemini_results if isinstance(e, dict) and e.get("company_name")}
+    merged = [e for e in gemini_results if isinstance(e, dict)]
     for entry in deepseek_results:
+        if not isinstance(entry, dict): continue
         if _normalise_name(entry.get("company_name", "")) not in seen:
             merged.append(entry)
     return merged
@@ -48,6 +49,33 @@ REGULATORY_BODIES = [
     {"id": "MHRA", "full": "Medicines and Healthcare products Regulatory Agency", "country": "UK"},
     {"id": "NMPA", "full": "National Medical Products Administration",            "country": "China"},
 ]
+
+
+_KNOWN_STATUSES = ["approved", "registered", "pending", "not found", "unknown"]
+
+def _recover_reg_strings(items: list) -> list | None:
+    """
+    Try to extract regulatory dicts from a list of plain strings.
+    Returns a 7-element list on success, None if recovery fails.
+    """
+    recovered = []
+    for item in items:
+        if not isinstance(item, str):
+            return None
+        text = item.lower()
+        matched = next((b for b in REGULATORY_BODIES if b["id"].lower() in text), None)
+        if not matched:
+            return None
+        status = next((s for s in _KNOWN_STATUSES if s in text), "unknown")
+        recovered.append({
+            "body":       matched["id"],
+            "full_name":  matched["full"],
+            "country":    matched["country"],
+            "status":     status,
+            "details":    item,
+            "confidence": "low",
+        })
+    return recovered if len(recovered) == 7 else None
 
 
 def research_regulatory_status(oem_name: str, product_name: str, provider: str) -> list:
@@ -91,7 +119,12 @@ Return ONLY a JSON array with exactly 7 objects in this order (FDA, EMA, TGA, HS
         raw = call_ai(prompt, provider, max_tokens=700)
         parsed = safe_parse_json(raw)
         if isinstance(parsed, list) and len(parsed) == 7:
-            return parsed
+            if all(isinstance(x, dict) for x in parsed):
+                return parsed
+            # try to salvage status info from strings like "FDA approved"
+            recovered = _recover_reg_strings(parsed)
+            if recovered:
+                return recovered
         return _default
     except Exception:
         return _default

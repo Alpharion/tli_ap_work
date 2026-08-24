@@ -193,6 +193,8 @@ def write_oem_sheet(ws, results: list[dict]):
                 else:
                     # pharma — one row per regulatory body
                     for body in reg_bodies:
+                        if not isinstance(body, dict):
+                            continue
                         status   = body.get("status", "unknown").lower()
                         reg_fill = REG_STATUS_FILL.get(status, REG_STATUS_FILL["unknown"])
                         _write_oem_base(row, fill)
